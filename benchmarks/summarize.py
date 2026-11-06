@@ -85,10 +85,10 @@ def main() -> None:
         same = lower = higher = differ = both = 0
         for n in names:
             x, y = runs[tag].get(n), ref.get(n)
+
             def ok(z):
-                return (
-                            z and z.get("converged") and z.get("n_imaginary") == want_imag
-                        )  # noqa: E731
+                return z and z.get("converged") and z.get("n_imaginary") == want_imag  # noqa: E731
+
             if not (ok(x) and ok(y)):
                 continue
             both += 1
