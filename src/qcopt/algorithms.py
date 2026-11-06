@@ -571,6 +571,8 @@ class _Branch:
     since_hessian: int = 0
     steps: int = 0
     ds: float = 0.0
+    need_hessian: bool = False
+    end_checks: int = 0
 
 
 def irc(
@@ -660,7 +662,7 @@ def irc(
             break
         asks = []
         for b in active:
-            want_h = bool(
+            want_h = b.need_hessian or bool(
                 exact_available
                 and kw.hessian_every
                 and b.since_hessian + 1 >= kw.hessian_every
@@ -703,18 +705,32 @@ def irc(
                 )
                 b.h = update(b.h, dx, y)
                 b.since_hessian += 1
-            b.frames.append(ans)
+            if b.need_hessian:
+                b.frames[-1] = ans  # the same point again, now with its Hessian
+                b.need_hessian = False
+            else:
+                b.frames.append(ans)
             de_last = abs(float(ans.energy) - float(b.prev.energy))
             b.x, b.prev = np.asarray(ans.positions, dtype=float).reshape(n, 3), ans
             space.at(b.x)
             hv, _ = space.eigh(space.hessian_to_space(b.h))
             n_free = len(hv) - space.n_locked
             g_cart = np.asarray(ans.gradient, dtype=float).ravel() * space.free
-            if max_atomic_norm(g_cart) < kw.gmax and (
-                np.min(hv[:n_free]) > -1e-5 or de_last < kw.flat_energy
-            ):
-                b.done, b.reason = True, "converged"
-                continue
+            if max_atomic_norm(g_cart) < kw.gmax:
+                if np.min(hv[:n_free]) > -1e-5:
+                    b.done, b.reason = True, "converged"
+                    continue
+                if exact_available and b.end_checks < 2 and ans.hessian is None:
+                    # Small gradient but the updated Hessian has negative curvature: a
+                    # flat shoulder of the path, or a minimum the updates blurred.
+                    # The exact Hessian here decides.
+                    b.end_checks += 1
+                    b.need_hessian = True
+                    b.next = b.x
+                    continue
+                if not exact_available and de_last < kw.flat_energy:
+                    b.done, b.reason = True, "converged (flat)"
+                    continue
             if b.steps >= kw.max_steps:
                 b.done, b.reason = True, "max_steps"
                 continue

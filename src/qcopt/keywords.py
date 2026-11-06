@@ -158,8 +158,10 @@ class IRCKeywords(_Keywords):
             at the transition state, then updated).
         update: Update between exact Hessians.
         gmax: A branch ends when its largest atomic gradient falls below this
-            (Hartree/bohr) with positive curvature, or with its last step lowering
-            the energy by less than ``flat_energy``.
+            (Hartree/bohr) with positive curvature. When the updated Hessian shows
+            negative curvature there, the exact Hessian decides (at most twice per
+            branch); without a Hessian program, a last step lowering the energy by
+            less than ``flat_energy`` also ends it.
         flat_energy: Energy change (Hartree) below which a step counts as flat.
         frozen_atoms: Atoms that do not move.
         fd_step: Step (bohr) of finite-difference Hessians.
