@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from .geometry import Array
+from .geometry import Array, cross
 
 Index = NDArray[np.intp]
 
@@ -59,14 +59,14 @@ def _torsion_vectors(x: Array, idx: Index) -> tuple[Array, ...]:
     f = _rows(x, idx, 0) - _rows(x, idx, 1)
     g = _rows(x, idx, 1) - _rows(x, idx, 2)
     h = _rows(x, idx, 3) - _rows(x, idx, 2)
-    return f, g, h, np.cross(f, g), np.cross(h, g)
+    return f, g, h, cross(f, g), cross(h, g)
 
 
 def torsion_values(x: Array, idx: Index) -> Array:
     """Dihedral angles (radians, in (-pi, pi]) of the quadruples ``(m, 4)``."""
     _, g, _, a, b = _torsion_vectors(x, idx)
     lg = np.sqrt((g * g).sum(1))
-    return np.arctan2((np.cross(b, a) * g).sum(1) / lg, (a * b).sum(1))
+    return np.arctan2((cross(b, a) * g).sum(1) / lg, (a * b).sum(1))
 
 
 def torsion_derivatives(x: Array, idx: Index) -> Array:

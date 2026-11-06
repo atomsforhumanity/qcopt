@@ -15,6 +15,15 @@ from qcref import periodic_table as pt
 Array = NDArray[np.float64]
 
 
+def cross(a: Array, b: Array) -> Array:
+    """Row-wise cross products of ``(..., 3)`` arrays (faster than np.cross on small ones)."""
+    out = np.empty(np.broadcast_shapes(a.shape, b.shape))
+    out[..., 0] = a[..., 1] * b[..., 2] - a[..., 2] * b[..., 1]
+    out[..., 1] = a[..., 2] * b[..., 0] - a[..., 0] * b[..., 2]
+    out[..., 2] = a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]
+    return out
+
+
 def masses(symbols: Sequence[str]) -> Array:
     """Atomic masses in amu (most common isotopes' standard atomic weights, PubChem)."""
     return np.array([float(getattr(pt, s.capitalize()).mass) for s in symbols])
@@ -43,7 +52,7 @@ def rigid_basis(positions: Array, weights: Array | None = None) -> Array:
         vecs[k] = t.ravel()
         e = np.zeros(3)
         e[k] = 1.0
-        vecs[3 + k] = (sw[:, None] * np.cross(e, r)).ravel()
+        vecs[3 + k] = (sw[:, None] * cross(e, r)).ravel()
     u, s, _ = np.linalg.svd(vecs.T, full_matrices=False)
     keep = np.nonzero(s > 1e-6 * np.max(s))[0]
     return np.ascontiguousarray(u[:, keep])

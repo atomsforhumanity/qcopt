@@ -156,6 +156,27 @@ def _fragment_values(frag: Fragment, x: Array) -> Array:
     return np.concatenate(out)
 
 
+def _all_fragment_values(frags: list[Fragment], x: Array) -> Array:
+    """Every fragment's coordinates, with one eigen-decomposition for all rotations."""
+    rot = [f for f in frags if f.n_rotation == 3]
+    vectors: dict[int, Array] = {}
+    if rot:
+        s = np.stack([f.ref.T @ (x[f.atoms] - x[f.atoms].mean(axis=0)) for f in rot])
+        _, vecs = np.linalg.eigh(_horn_matrix(s))
+        v = _quaternion_to_vector(vecs[:, :, -1])
+        vectors = {id(f): v[i] for i, f in enumerate(rot)}
+    out = []
+    for f in frags:
+        xs = x[f.atoms]
+        out.append(xs.mean(axis=0))
+        if f.n_rotation == 3:
+            out.append(f.rg * vectors[id(f)])
+        elif f.n_rotation == 2:
+            u = xs[-1] - xs[0]
+            out.append(f.rg * (f.axes[1:] @ (u / np.linalg.norm(u))))
+    return np.concatenate(out)
+
+
 def _fragment_b(frag: Fragment, x: Array, n_atoms: int, h: float = 1e-5) -> Array:
     na = len(frag.atoms)
     rows = np.zeros((frag.size, 3 * n_atoms))
@@ -203,7 +224,7 @@ def make_fragment(
         trial = np.eye(3)[int(np.argmin(np.abs(u)))]
         e1 = trial - (trial @ u) * u
         e1 /= np.linalg.norm(e1)
-        axes = np.array([u, e1, np.cross(u, e1)])
+        axes = np.array([u, e1, prim.cross(u, e1)])
     return Fragment(atoms=a, ref=ref, rg=rg, linear=linear, axes=axes)
 
 
@@ -254,9 +275,7 @@ class Primitives:
         q[self._slices["linear"]] = self._linear_values(x)
         q[self._slices["torsions"]] = prim.torsion_values(x, self.torsions)
         if self.fragments:
-            q[self._slices["fragments"]] = np.concatenate(
-                [_fragment_values(f, x) for f in self.fragments]
-            )
+            q[self._slices["fragments"]] = _all_fragment_values(self.fragments, x)
         return q
 
     def b_matrix(self, x: Array) -> Array:
@@ -490,7 +509,7 @@ def build_primitives(
         trial = np.eye(3)[int(np.argmin(np.abs(u)))]
         e1 = trial - (trial @ u) * u
         e1 /= np.linalg.norm(e1)
-        axes[m] = [e1, np.cross(u, e1)]
+        axes[m] = [e1, prim.cross(u, e1)]
     return Primitives(
         bonds=np.array(sorted(edges), dtype=np.intp).reshape(-1, 2),
         bends=np.array(bends, dtype=np.intp).reshape(-1, 3),
@@ -657,7 +676,7 @@ class DelocalizedInternals:
         return 0.5 * (k + k.T)
 
     def step(
-        self, x: Array, ds: Array, *, max_iter: int = 50, tol: float = 1e-7
+        self, x: Array, ds: Array, *, max_iter: int = 50, tol: float = 1e-6
     ) -> tuple[Array, Array, bool]:
         """Cartesian geometry for the internal step ``ds`` from ``x``.
 
