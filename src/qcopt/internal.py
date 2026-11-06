@@ -177,17 +177,27 @@ def _fragment_b(frag: Fragment, x: Array, n_atoms: int, h: float = 1e-5) -> Arra
     return rows
 
 
-def make_fragment(atoms: Sequence[int], x: Array) -> Fragment:
-    """The rigid-body coordinates of the atoms ``atoms`` at geometry ``x``."""
+def make_fragment(
+    atoms: Sequence[int], x: Array, linear: bool | None = None
+) -> Fragment:
+    """The rigid-body coordinates of the atoms ``atoms`` at geometry ``x``.
+
+    Args:
+        atoms: The fragment's atoms.
+        x: Geometry (bohr).
+        linear: Whether the fragment is linear; None: decide from its shape.
+    """
     a = np.asarray(sorted(atoms), dtype=np.intp)
     xs = np.asarray(x, dtype=float).reshape(-1, 3)[a]
     ref = xs - xs.mean(axis=0)
     rg = float(np.sqrt((ref * ref).sum(axis=1).mean())) if len(a) > 1 else 0.0
     rg = max(rg, 1.0) if len(a) > 1 else 0.0
     axes = np.eye(3)
-    linear = False
-    if len(a) == 2 or (len(a) > 2 and _is_linear(xs, tol=0.05)):
+    if linear is None:
+        linear = len(a) == 2 or (len(a) > 2 and _is_linear(xs, tol=0.05))
+    if len(a) == 2:
         linear = True
+    if linear:
         u = xs[-1] - xs[0]
         u /= np.linalg.norm(u)
         trial = np.eye(3)[int(np.argmin(np.abs(u)))]
@@ -488,7 +498,17 @@ def build_primitives(
         linear_axes=axes,
         torsions=np.array(sorted(torsions), dtype=np.intp).reshape(-1, 4),
         n_atoms=n,
-        fragments=[make_fragment(f, x) for f in _components(n, list(edges))]
+        fragments=[
+            # Linear exactly when the fragment has no ordinary bend, so its rotations
+            # and its bends never both leave a motion out (H-C-N at 171 degrees).
+            make_fragment(
+                f,
+                x,
+                linear=len(f) == 2
+                or (len(f) > 2 and not any(set(t) <= set(f) for t in bends)),
+            )
+            for f in _components(n, list(edges))
+        ]
         if tric
         else [],
     )

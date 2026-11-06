@@ -18,6 +18,7 @@ from .constraints import ConstraintSet, correction, free_gradient, project
 from .coordinates import CartesianCoordinates, InternalCoordinates, make_coordinates
 from .driver import Algorithm, Answer, Ask
 from .geometry import Array, masses, max_atomic_norm, rms
+from .internal import CoordinateError
 from .keywords import IRCKeywords, OptimizationKeywords
 from .space import LOCKED_CURVATURE, CartesianSpace
 from .steps import rfo_step, select_mode, update_trust
@@ -144,6 +145,20 @@ def optimize(
         v, w = coords.eigh(pf @ hh @ pf + LOCKED_CURVATURE * pc)
         return v, w, pf @ g, jw_
 
+    def _rebuild(hh: Array) -> Array:
+        """New internal coordinates at ``x``; Cartesians when they cannot be built."""
+        nonlocal coords
+        info["coordinate_rebuilds"] += 1
+        assert isinstance(coords, InternalCoordinates)
+        try:
+            return coords.rebuild(x, hh)
+        except CoordinateError:
+            hx = coords.ic.to_cartesian_hessian(x, hh)
+            coords = CartesianCoordinates(n, kw.frozen_atoms, kw.trust_type == "atomic")
+            coords.at(x)
+            info["coordinates"] = f"{info['coordinates']} -> cartesian"
+            return hx + 1e-4 * np.eye(3 * n)
+
     frames: list[Answer] = []
     log: list[dict[str, Any]] = []
     info: dict[str, Any] = {
@@ -233,9 +248,8 @@ def optimize(
             0.2 * kw.convergence.gmax,
             1e-3 * max_atomic_norm(np.asarray(a.gradient)),
         ):
-            h = coords.rebuild(x, h)  # type: ignore[union-attr]
+            h = _rebuild(h)
             g = coords.gradient(x, np.asarray(a.gradient, dtype=float))
-            info["coordinate_rebuilds"] += 1
         vals, vecs, g_eff, jw = _decompose(h)
         n_free = len(vals) - coords.n_locked - (cons.size if cons else 0)
         if (
@@ -276,9 +290,8 @@ def optimize(
         if not ok:
             info["backtransform_failures"] += 1
             if isinstance(coords, InternalCoordinates):
-                h = coords.rebuild(x, h)
+                h = _rebuild(h)
                 g = coords.gradient(x, np.asarray(a.gradient, dtype=float))
-                info["coordinate_rebuilds"] += 1
             trust = max(kw.trust_min, 0.5 * trust)
             if info["backtransform_failures"] > 20:
                 coords = CartesianCoordinates(
