@@ -171,3 +171,5 @@ run.out
 
 # Convention for testing scripts
 fake*.py
+# benchmark run logs
+benchmarks/*.out

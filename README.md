@@ -60,9 +60,18 @@ out = compute(inp)   # the ProgramInput above
 `benchmarks/` compares qcopt with Sella, geomeTRIC and OptKing on the same axtb
 gradients; results are summarized in AFH's findings.
 
+## Install
+
+```sh
+pip install qcopt               # or: pip install "qcopt[qccompute]" for any program qccompute runs
+```
+
+axtb (in-process g-xTB and GFN2-xTB with analytic Hessians) is installed from its
+[repository](https://github.com/atomsforhumanity/axtb) until it is on PyPI.
+
 ## Status
 
-Early development (0.1.0.dev0). Not yet released to PyPI.
+0.1: the API may still change between minor versions.
 
 ## License
 
