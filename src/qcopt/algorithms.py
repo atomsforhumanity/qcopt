@@ -119,7 +119,8 @@ def optimize(
         )
 
     frames: list[Answer] = []
-    info: dict[str, Any] = {"rejected_steps": 0, "hessian_recomputes": 0}
+    log: list[dict[str, Any]] = []
+    info: dict[str, Any] = {"rejected_steps": 0, "hessian_recomputes": 0, "log": log}
     source = _hessian_source(kw, has_hessian_program, transition_state)
     exact_available = source in ("exact", "finite_difference")
     (a,) = count((yield [Ask("hessian" if exact_available else "gradient", x)]))
@@ -204,6 +205,17 @@ def optimize(
         de = b.energy - a.energy
         ratio = de / step.predicted if abs(step.predicted) > 1e-14 else 1.0
         norm = _size(dx)
+        log.append(
+            {
+                "step": norm,
+                "trust": trust,
+                "ratio": float(ratio),
+                "lowest": float(vals[0]),
+                "mode": None if mode is None else int(mode),
+                "de": float(de),
+                "gmax": max_atomic_norm(gp),
+            }
+        )
         trust = update_trust(
             trust,
             ratio,

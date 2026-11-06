@@ -32,6 +32,9 @@ def main() -> None:
         "--tag", action="append", default=[], help="OPT=TAG: output name suffix"
     )
     p.add_argument("--limit", type=int, default=0)
+    p.add_argument(
+        "--pairs", help="directory of <name>/start.xyz and end.xyz (IRC checks)"
+    )
     a = p.parse_args()
     extras = dict(e.split("=", 1) for e in a.extra)
     tags = dict(t.split("=", 1) for t in a.tag)
@@ -41,8 +44,9 @@ def main() -> None:
     out = Path(a.outdir)
     out.mkdir(parents=True, exist_ok=True)
     jobs = []
+    stems = {Path(f).stem for f in files}
     for f in files:
-        name = Path(f).parent.name
+        name = Path(f).parent.name + (f"_{Path(f).stem}" if len(stems) > 1 else "")
         for opt in a.optimizers:
             tag = opt + (f"-{tags[opt]}" if opt in tags else "")
             dest = out / f"{name}.{tag}.json"
@@ -65,6 +69,14 @@ def main() -> None:
             "--extra",
             extra,
         ]
+        if a.pairs:
+            name = Path(f).parent.name
+            cmd += [
+                "--reactant",
+                f"{a.pairs}/{name}/start.xyz",
+                "--product",
+                f"{a.pairs}/{name}/end.xyz",
+            ]
         env = dict(
             os.environ,
             OMP_NUM_THREADS="1",

@@ -92,11 +92,23 @@ def run_qcopt(calc: Counted, sym, x0, task, gmax, maxiter, extra):
 
     import qcopt
 
-    ev = qcopt.FunctionEvaluator(calc.gradient, calc.hessian, name="axtb")
+    extra = dict(extra)
+    use_h = not extra.pop("no_hessian", False)
+    ev = qcopt.FunctionEvaluator(
+        calc.gradient, calc.hessian if use_h else None, name="axtb"
+    )
     s = Structure(symbols=sym, geometry=x0)
+    if task == "irc":
+        out = qcopt.irc(
+            s, {"program": "axtb"}, hessian=use_h or None, evaluator=ev, **extra
+        )
+        frames = [f.structure.geometry for f in out.results.frames]
+        return bool(out.success), frames, len(frames), out.traceback
     kw = dict(maxiter=maxiter, convergence={"gmax": gmax}, **extra)
     fn = qcopt.find_ts if task == "ts" else qcopt.minimize
-    out = fn(s, {"program": "axtb"}, hessian=True, evaluator=ev, **kw)
+    out = fn(
+        s, {"program": "axtb"}, hessian=True if use_h else None, evaluator=ev, **kw
+    )
     x = out.results.final_structure.geometry
     return (
         bool(out.results.extras["converged"]),
@@ -109,7 +121,8 @@ def run_qcopt(calc: Counted, sym, x0, task, gmax, maxiter, extra):
 def run_sella(calc: Counted, sym, x0, task, gmax, maxiter, extra):
     from ase import Atoms
     from ase.calculators.calculator import Calculator, all_changes
-    from sella import Sella
+    from ase.io import Trajectory
+    from sella import IRC, Sella
 
     class AseAxtb(Calculator):
         implemented_properties = ["energy", "forces"]
@@ -121,17 +134,45 @@ def run_sella(calc: Counted, sym, x0, task, gmax, maxiter, extra):
             e, g = calc.gradient(self.atoms.positions / BOHR)
             self.results = {"energy": e * EV, "forces": -g * EV / BOHR}
 
-    atoms = Atoms(sym, positions=x0 * BOHR)
-    atoms.calc = AseAxtb()
+    extra = dict(extra)
+    use_h = not extra.pop("no_hessian", False)
 
     def hess(a):
         return calc.hessian(a.positions / BOHR) * EV / BOHR**2
 
+    if task == "irc":
+        frames = []
+        for direction in ("reverse", "forward"):
+            atoms = Atoms(sym, positions=x0 * BOHR)
+            atoms.calc = AseAxtb()
+            with tempfile.TemporaryDirectory() as d:
+                traj = os.path.join(d, "irc.traj")
+                kw = {
+                    "keep_going": True,
+                    **{k: v for k, v in extra.items() if k not in ("fmax", "steps")},
+                }
+                if use_h:
+                    kw["hessian_function"] = hess
+                opt = IRC(atoms, logfile=None, trajectory=traj, **kw)
+                try:
+                    opt.run(
+                        fmax=extra.get("fmax", 0.1),
+                        steps=extra.get("steps", 1000),
+                        direction=direction,
+                    )
+                except Exception as exc:
+                    return False, None, None, f"{type(exc).__name__}: {exc}"
+                branch = [a.positions / BOHR for a in Trajectory(traj)]
+            frames += list(reversed(branch)) if direction == "reverse" else branch
+        return True, frames, len(frames), None
+
+    atoms = Atoms(sym, positions=x0 * BOHR)
+    atoms.calc = AseAxtb()
     opt = Sella(
         atoms,
         order=1 if task == "ts" else 0,
         internal=bool(extra.get("internal", False)),
-        hessian_function=hess,
+        hessian_function=hess if use_h else None,
         logfile=None,
     )
     fmax = gmax * EV / BOHR
@@ -159,28 +200,113 @@ def run_geometric(calc: Counted, sym, x0, task, gmax, maxiter, extra):
     mol = geometric.molecule.Molecule()
     mol.elem = list(sym)
     mol.xyzs = [x0 * BOHR]
+    use_h = not extra.get("no_hessian", False)
     with tempfile.TemporaryDirectory() as d:
-        hfile = os.path.join(d, "hessian.txt")
-        np.savetxt(hfile, calc.hessian(x0))
-        try:
-            m = geometric.optimize.run_optimizer(
-                customengine=Eng(mol),
-                check=1,
-                input=os.path.join(d, "x"),
+        kw = {}
+        if use_h:
+            hfile = os.path.join(d, "hessian.txt")
+            np.savetxt(hfile, calc.hessian(x0))
+            kw["hessian"] = f"file:{hfile}"
+        if task == "irc":
+            kw["irc"] = True
+        else:
+            kw.update(
                 transition=(task == "ts"),
-                hessian=f"file:{hfile}",
-                coordsys=extra.get("coordsys", "tric"),
-                maxiter=maxiter,
                 convergence_gmax=gmax,
                 convergence_grms=1.0,
                 convergence_energy=1.0,
                 convergence_drms=1.0,
                 convergence_dmax=1.0,
             )
+        try:
+            m = geometric.optimize.run_optimizer(
+                customengine=Eng(mol),
+                check=1,
+                input=os.path.join(d, "x"),
+                coordsys=extra.get("coordsys", "tric"),
+                maxiter=maxiter,
+                **kw,
+            )
+            if task == "irc":
+                frames = [np.asarray(xyz) / BOHR for xyz in m.xyzs]
+                return True, frames, len(frames), None
             x = np.asarray(m.xyzs[-1]) / BOHR
             return True, x, len(m.xyzs) - 1, None
         except Exception as exc:  # geomeTRIC raises when it does not converge
             return False, None, None, f"{type(exc).__name__}: {exc}"
+
+
+def bonds(sym, x):
+    from qcref import periodic_table as pt
+
+    r = np.array([float(getattr(pt, e.capitalize()).cov_radius) for e in sym])
+    d = np.linalg.norm(x[:, None] - x[None], axis=-1)
+    adj = d < 1.25 * (r[:, None] + r[None])
+    np.fill_diagonal(adj, False)
+    return adj
+
+
+def irc_check(a, sym, frames):
+    """Minimize both IRC ends (qcopt, exact Hessian) and compare their bonds."""
+    from qcdata import Structure
+
+    import qcopt
+
+    out = {"n_frames": len(frames)}
+    ends = []
+    for x in (frames[0], frames[-1]):
+        c2 = Counted(a.method, sym, x)
+        ev = qcopt.FunctionEvaluator(c2.gradient, c2.hessian, name="axtb")
+        m = qcopt.minimize(
+            Structure(symbols=sym, geometry=x),
+            {"program": "axtb"},
+            hessian=True,
+            evaluator=ev,
+            frequencies=True,
+            maxiter=2000,
+        )
+        ends.append(m.results.final_structure.geometry)
+        out.setdefault("end_n_imaginary", []).append(
+            m.results.extras.get("n_imaginary")
+        )
+        out.setdefault("end_energy", []).append(float(m.results.final_energy))
+        out.setdefault("end_drop_kcal", []).append(
+            float(
+                (Counted(a.method, sym, x).gradient(x)[0] - m.results.final_energy)
+                * 627.5094740631
+            )
+        )
+    graphs = [bonds(sym, e) for e in ends]
+    raw = [bonds(sym, np.asarray(f)) for f in (frames[0], frames[-1])]
+    out["ends_changed_on_minimization"] = [
+        bool((g != r).any()) for g, r in zip(graphs, raw)
+    ]
+    if a.reactant and a.product:
+        import networkx as nx
+
+        def graph(symbols, adj):
+            g = nx.Graph()
+            for i, e in enumerate(symbols):
+                g.add_node(i, element=e)
+            g.add_edges_from(zip(*np.nonzero(np.triu(adj))))
+            return g
+
+        def same(g1, g2):
+            return nx.is_isomorphic(
+                g1, g2, node_match=lambda u, v: u["element"] == v["element"]
+            )
+
+        rs, rx = read_xyz(a.reactant)
+        ps, px = read_xyz(a.product)
+        gr, gp = graph(rs, bonds(rs, rx)), graph(ps, bonds(ps, px))
+        ge = [graph(sym, g) for g in graphs]
+        out["ends_match"] = [same(g, gr) or same(g, gp) for g in ge]
+        out["connects"] = bool(
+            (same(ge[0], gr) and same(ge[1], gp))
+            or (same(ge[0], gp) and same(ge[1], gr))
+        )
+    out["ends"] = [np.asarray(e).tolist() for e in ends]
+    return out
 
 
 RUNNERS = {"qcopt": run_qcopt, "sella": run_sella, "geometric": run_geometric}
@@ -191,7 +317,9 @@ def main() -> None:
     p.add_argument("optimizer", choices=sorted(RUNNERS))
     p.add_argument("xyz")
     p.add_argument("out")
-    p.add_argument("--task", default="ts", choices=["ts", "min"])
+    p.add_argument("--task", default="ts", choices=["ts", "min", "irc"])
+    p.add_argument("--reactant")
+    p.add_argument("--product")
     p.add_argument("--method", default="gxtb-v2.0.1")
     p.add_argument("--fmax-ev", type=float, default=0.001)
     p.add_argument("--maxiter", type=int, default=1000)
@@ -210,6 +338,16 @@ def main() -> None:
         "n_atoms": len(sym),
         "extra": extra,
     }
+    # import the optimizer before timing it
+    if a.optimizer == "qcopt":
+        import qcdata  # noqa: F401
+
+        import qcopt  # noqa: F401
+    elif a.optimizer == "sella":
+        import ase  # noqa: F401
+        import sella  # noqa: F401
+    else:
+        import geometric.optimize  # noqa: F401
     t0 = time.perf_counter()
     try:
         conv, x, nsteps, err = RUNNERS[a.optimizer](
@@ -234,7 +372,9 @@ def main() -> None:
         t_hess=calc.t_hess,
         t_optimizer=wall - calc.t_grad - calc.t_hess,
     )
-    if x is not None:
+    if x is not None and a.task == "irc":
+        rec.update(irc_check(a, sym, x))
+    elif x is not None:
         import qcopt
 
         check = Counted(a.method, sym, x)
