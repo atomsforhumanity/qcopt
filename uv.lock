@@ -1181,6 +1181,7 @@ dependencies = [
 
 [package.optional-dependencies]
 qccompute = [
+    { name = "qccodec" },
     { name = "qccompute" },
 ]
 
@@ -1199,6 +1200,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=1.24.0" },
+    { name = "qccodec", marker = "extra == 'qccompute'", specifier = ">=0.21.0" },
     { name = "qccompute", marker = "extra == 'qccompute'", specifier = ">=0.22.0" },
     { name = "qcdata", specifier = ">=0.23.1" },
     { name = "qcref", specifier = ">=0.5.1" },

@@ -30,7 +30,10 @@ Changelog = "https://github.com/atomsforhumanity/qcopt/blob/main/CHANGELOG.md"
 "Bug Tracker" = "https://github.com/atomsforhumanity/qcopt/issues"
 
 [project.optional-dependencies]
-qccompute = ["qccompute>=0.22.0"]
+qccompute = ["qccompute>=0.22.0", "qccodec>=0.21.0"]
+
+[project.entry-points."qccodec.codecs"]
+qcopt = "qcopt.codec:codec"
 
 [dependency-groups]
 dev = [
