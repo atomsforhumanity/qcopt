@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 from qcref import periodic_table as pt
@@ -608,11 +609,29 @@ class DelocalizedInternals:
         self.u = np.ascontiguousarray(vecs[:, keep])
         self.q_ref = self.prims.values(x)
         self.n = self.u.shape[1]
+        # A step evaluates the same geometry several times (its start, the gradient
+        # and rigid-motion directions at its end); keep the last few results.
+        self._cache: dict[tuple[str, bytes], Array] = {}
+
+    def _cached(self, kind: str, x: Array, compute: Any) -> Array:
+        xx = np.ascontiguousarray(x, dtype=float).reshape(-1, 3)
+        key = (kind, xx.tobytes())
+        hit = self._cache.get(key)
+        if hit is None:
+            if len(self._cache) >= 8:
+                self._cache.pop(next(iter(self._cache)))
+            hit = self._cache[key] = compute(xx)
+            hit.setflags(write=False)  # shared between callers
+        return hit
 
     def primitive_values(self, x: Array) -> Array:
         """Primitives at ``x``, torsions unwrapped relative to the reference."""
-        q = self.prims.values(x)
-        return self.q_ref + self.prims.difference(q, self.q_ref)
+
+        def compute(xx: Array) -> Array:
+            q = self.prims.values(xx)
+            return self.q_ref + self.prims.difference(q, self.q_ref)
+
+        return self._cached("q", x, compute)
 
     def values(self, x: Array) -> Array:
         """Delocalized internals ``s = U^T q`` at ``x``."""
@@ -632,7 +651,7 @@ class DelocalizedInternals:
 
     def b_matrix(self, x: Array) -> Array:
         """``ds/dx``, ``(n, 3 n_atoms)``."""
-        return self.u.T @ self._b_prim(x)
+        return self._cached("b", x, lambda xx: self.u.T @ self._b_prim(xx))
 
     def gradient(self, x: Array, gradient: Array) -> Array:
         """Internal gradient from a Cartesian one: ``(B B^T)^-1 B g``."""
