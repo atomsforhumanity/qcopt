@@ -146,7 +146,8 @@ class IRCKeywords(_Keywords):
             (bohr amu^1/2). A step that overshoots the valley floor (the energy
             rises, or the new gradient points along the step) is retried at half the
             length. On 100 Reaction-QM IRCs at g-xTB, GS2 at 0.3 reached the same
-            minima as Sella in all 100 with 29% fewer gradients than LQA at 0.1; LQA
+            minima as Sella in all 100 with a median of 375 gradients (ends included)
+            against LQA at 0.1's 528; LQA
             at 0.3 and GS2 at 0.5 each ended one in another minimum.
         max_steps: Most steps per branch.
         method: ``lqa``: local quadratic approximation (Page and McIver, 1988) on
