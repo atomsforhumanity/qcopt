@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 
 from . import hessians
+from .constraints import ConstraintSet, correction, free_gradient, project
 from .coordinates import CartesianCoordinates, InternalCoordinates, make_coordinates
 from .driver import Algorithm, Answer, Ask
 from .geometry import Array, masses, max_atomic_norm, rms
@@ -114,6 +115,35 @@ def optimize(
     coords = make_coordinates(
         kw.coordinates, symbols, x, kw.frozen_atoms, kw.trust_type == "atomic"
     )
+    cons = (
+        ConstraintSet(kw.constraints, x)
+        if kw.constraints is not None and kw.constraints.size
+        else None
+    )
+
+    def _free(gradient: Any, xx: Array) -> Array:
+        """Cartesian gradient without constraint forces or rigid motion."""
+        gx = np.asarray(gradient, dtype=float).ravel()
+        if cons is not None:
+            gx = free_gradient(cons.jacobian(xx), gx)
+        cart.at(xx)
+        return cart.project(gx)
+
+    def _satisfied(xx: Array) -> bool:
+        if cons is None:
+            return True
+        return bool(np.abs(cons.violation(xx)).max() < kw.constraint_tolerance)
+
+    def _decompose(hh: Array) -> tuple[Array, Array, Array, Array | None]:
+        """Eigenpairs of the Hessian with constrained directions locked."""
+        if cons is None:
+            v, w = coords.eigh(hh)
+            return v, w, g, None
+        jw_ = coords.jacobian_to_space(x, cons.jacobian(x))
+        pf, pc = project(jw_)
+        v, w = coords.eigh(pf @ hh @ pf + LOCKED_CURVATURE * pc)
+        return v, w, pf @ g, jw_
+
     frames: list[Answer] = []
     log: list[dict[str, Any]] = []
     info: dict[str, Any] = {
@@ -162,9 +192,7 @@ def optimize(
     while iterations < kw.maxiter:
         iterations += 1
         cart.at(x)
-        if _converged(
-            kw, cart.project(np.asarray(a.gradient).ravel()), last_step, last_de
-        ):
+        if _converged(kw, _free(a.gradient, x), last_step, last_de) and _satisfied(x):
             if transition_state or kw.escape_saddles == 0:
                 converged = True
                 break
@@ -208,8 +236,8 @@ def optimize(
             h = coords.rebuild(x, h)  # type: ignore[union-attr]
             g = coords.gradient(x, np.asarray(a.gradient, dtype=float))
             info["coordinate_rebuilds"] += 1
-        vals, vecs = coords.eigh(h)
-        n_free = len(vals) - coords.n_locked
+        vals, vecs, g_eff, jw = _decompose(h)
+        n_free = len(vals) - coords.n_locked - (cons.size if cons else 0)
         if (
             transition_state
             and exact_available
@@ -225,7 +253,7 @@ def optimize(
                 frames[-1] = _with_hessian(frames[-1], np.asarray(ha.hessian))
                 info["hessian_recomputes"] += 1
                 steps_since_hessian = 0
-                vals, vecs = coords.eigh(h)
+                vals, vecs, g_eff, jw = _decompose(h)
         mode = None
         if transition_state:
             if mode_ref is None or not isinstance(coords, CartesianCoordinates):
@@ -236,12 +264,15 @@ def optimize(
         step = rfo_step(
             vals,
             vecs,
-            g,
+            g_eff,
             trust,
             mode=mode,
             atomic=coords.name == "cartesian" and kw.trust_type == "atomic",
         )
-        x_new, d, ok = coords.step(x, step.dx)
+        dw = step.dx
+        if jw is not None and cons is not None:
+            dw = dw + correction(jw, cons.violation(x), kw.max_correction)
+        x_new, d, ok = coords.step(x, dw)
         if not ok:
             info["backtransform_failures"] += 1
             if isinstance(coords, InternalCoordinates):
@@ -337,8 +368,8 @@ def optimize(
     if not converged:
         cart.at(x)
         converged = _converged(
-            kw, cart.project(np.asarray(a.gradient).ravel()), last_step, last_de
-        )
+            kw, _free(a.gradient, x), last_step, last_de
+        ) and _satisfied(x)
 
     if freqs is not None:
         info["n_imaginary"] = freqs.n_imaginary(kw.imaginary_cutoff)
@@ -356,7 +387,7 @@ def optimize(
         n_hessians=count.hessians,
         n_steps=len(frames) - 1,
         final_trust=trust,
-        gmax=max_atomic_norm(cart.project(np.asarray(a.gradient).ravel())),
+        gmax=max_atomic_norm(_free(a.gradient, x)),
         hessian=source,
         update=update_name,
     )

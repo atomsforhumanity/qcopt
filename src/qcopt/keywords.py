@@ -36,6 +36,29 @@ class Convergence(_Keywords):
     energy: float | None = None
 
 
+class Constraints(_Keywords):
+    """Distances, angles and dihedrals held fixed during an optimization.
+
+    Each entry lists 0-based atom indices and, optionally, the target value: a
+    distance in bohr, an angle or dihedral in degrees. Without a value the starting
+    value is kept.
+
+    Attributes:
+        distance: ``[i, j]`` or ``[i, j, bohr]``.
+        angle: ``[i, j, k]`` or ``[i, j, k, degrees]``, vertex ``j``.
+        dihedral: ``[i, j, k, l]`` or ``[i, j, k, l, degrees]``.
+    """
+
+    distance: list[list[float]] = []
+    angle: list[list[float]] = []
+    dihedral: list[list[float]] = []
+
+    @property
+    def size(self) -> int:
+        """Number of constraints."""
+        return len(self.distance) + len(self.angle) + len(self.dihedral)
+
+
 class OptimizationKeywords(_Keywords):
     """Keywords of minimizations (``optimization``) and ``transition_state`` searches.
 
@@ -63,6 +86,10 @@ class OptimizationKeywords(_Keywords):
         trust_min: Smallest trust radius.
         trust_max: Largest trust radius.
         frozen_atoms: 0-based indices of atoms that do not move.
+        constraints: Distances, angles and dihedrals to hold (see Constraints).
+        constraint_tolerance: Largest violation (bohr or radians) at convergence.
+        max_correction: Largest change (bohr or radians) of a constrained value in
+            one step while it is brought to its target.
         mode: Transition states: a guide direction ``(n_atoms, 3)`` (such as a path's
             tangent at its highest image); the Hessian eigenvector overlapping it most
             is the one climbed. None: the lowest.
@@ -94,6 +121,9 @@ class OptimizationKeywords(_Keywords):
     trust_min: float = Field(default=1e-3, gt=0)
     trust_max: float = Field(default=1.0, gt=0)
     frozen_atoms: list[int] = []
+    constraints: Constraints | None = None
+    constraint_tolerance: float = Field(default=1e-6, gt=0)
+    max_correction: float = Field(default=0.1, gt=0)
     mode: list[list[float]] | None = None
     follow: Literal["overlap", "lowest"] = "overlap"
     max_rejections: int = Field(default=3, ge=0)

@@ -3,7 +3,7 @@
 from .api import find_ts, irc, minimize, run
 from .driver import Answer, Ask, Request, TaskContext, drive
 from .evaluators import AxtbEvaluator, ComputeEvaluator, FunctionEvaluator
-from .keywords import Convergence, IRCKeywords, OptimizationKeywords
+from .keywords import Constraints, Convergence, IRCKeywords, OptimizationKeywords
 from .vibrations import Frequencies, frequencies
 
 __all__ = [
@@ -11,6 +11,7 @@ __all__ = [
     "Ask",
     "AxtbEvaluator",
     "ComputeEvaluator",
+    "Constraints",
     "Convergence",
     "Frequencies",
     "FunctionEvaluator",

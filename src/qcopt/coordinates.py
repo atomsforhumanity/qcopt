@@ -58,6 +58,12 @@ class CartesianCoordinates:
         """Eigen-decomposition with locked directions shifted up."""
         return self.space.eigh(h)
 
+    def jacobian_to_space(self, x: Array, jx: Array) -> Array:
+        """Constraint Jacobian rows in these coordinates (frozen atoms left out)."""
+        out = np.asarray(jx, dtype=float).copy()
+        out[:, ~self.space.free] = 0.0
+        return out
+
     def step(self, x: Array, d: Array) -> tuple[Array, Array, bool]:
         """New geometry; the step taken; always exact."""
         dx = self.space.project(d)
@@ -118,6 +124,11 @@ class InternalCoordinates:
         """Plain eigen-decomposition."""
         vals, vecs = np.linalg.eigh(0.5 * (h + h.T))
         return vals, vecs
+
+    def jacobian_to_space(self, x: Array, jx: Array) -> Array:
+        """Constraint Jacobian rows in the internal coordinates: ``J B^+``."""
+        b = self.ic.b_matrix(x)
+        return np.asarray(jx, dtype=float) @ b.T @ np.linalg.inv(b @ b.T)
 
     def step(self, x: Array, d: Array) -> tuple[Array, Array, bool]:
         """Back-transform an internal step."""
