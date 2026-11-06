@@ -17,3 +17,9 @@ All notable changes to this project are documented here. The format follows
   finite-difference Hessians from gradients computed together.
 - Lindh model Hessian; BFGS, SR1, PSB, Bofill and TS-BFGS updates; harmonic frequency
   check of the final structure.
+- Internal coordinates, the default: TRIC (per-fragment translation and rotation, with
+  analytic rotation derivatives) and delocalized internals; rebuilt when they degrade,
+  Cartesians when they cannot describe the structure.
+- Constraints on distances, angles and dihedrals; saddle escape for minimizations
+  (`escape_saddles`).
+- A qccodec codec, so `qccompute.compute(ProgramInput(program="qcopt", ...))` works.

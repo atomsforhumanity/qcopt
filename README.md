@@ -40,13 +40,25 @@ out = qcopt.run(inp)            # or qcopt.run([inp1, inp2, ...])
 
 | Calculation | Method |
 |---|---|
-| `optimization` | RS-RFO in Cartesian coordinates with rigid motion projected out; Lindh model Hessian or the program's exact one; BFGS updates (Bofill while the Hessian is indefinite) |
-| `transition_state` | RS-P-RFO climbing the lowest mode (or the one following a guide direction); exact or finite-difference starting Hessian; TS-BFGS updates; recomputed when the negative mode is lost |
-| `irc` | Mass-weighted steepest descent by the local quadratic approximation, both branches together, frames in the input's frame |
+| `optimization` | RS-RFO in TRIC coordinates (Wang and Song, 2016: each molecule's internal coordinates plus its translation and rotation), or delocalized internals, or Cartesians; Lindh model Hessian or the program's exact one; BFGS updates (Bofill while the Hessian is indefinite); optional frequency check that steps off saddle points |
+| `transition_state` | RS-P-RFO climbing the lowest mode (or one following a guide direction); exact or finite-difference starting Hessian; TS-BFGS updates; recomputed when the negative mode is lost |
+| `irc` | Mass-weighted steepest descent by the local quadratic approximation, both branches together, frames in the input's frame; overshoots retried at half the step |
 
-Frozen atoms, convergence criteria, trust radii and Hessian policies are keywords
-(`qcopt.keywords`). Every frame is a qcdata `Frame` with the energy and gradient computed
-there.
+Distances, angles and dihedrals can be held at target values (`constraints`), atoms
+frozen (`frozen_atoms`). Every frame is a qcdata `Frame` with the energy and gradient
+computed there.
+
+With qccompute installed, qcopt is also a program it runs:
+
+```python
+from qccompute import compute
+out = compute(inp)   # the ProgramInput above
+```
+
+## Benchmarks
+
+`benchmarks/` compares qcopt with Sella, geomeTRIC and OptKing on the same axtb
+gradients; results are summarized in AFH's findings.
 
 ## Status
 

@@ -112,7 +112,7 @@ class OptimizationKeywords(_Keywords):
 
     maxiter: int = Field(default=500, ge=1)
     convergence: Convergence = Convergence()
-    coordinates: Literal["tric", "dlc", "cartesian"] = "cartesian"
+    coordinates: Literal["tric", "dlc", "cartesian"] = "tric"
     hessian: HessianSource = "auto"
     hessian_every: int = Field(default=0, ge=0)
     recompute_hessian_on_loss: bool = True
@@ -143,7 +143,7 @@ class IRCKeywords(_Keywords):
     Attributes:
         direction: Which branches to follow from the transition state.
         step_size: Arc length of each step in mass-weighted coordinates
-            (bohr amu^1/2).
+            (bohr amu^1/2). A step whose energy rises is retried at half the length.
         max_steps: Most steps per branch.
         method: ``lqa``: local quadratic approximation (Page and McIver, 1988) on
             the current Hessian.
@@ -158,7 +158,7 @@ class IRCKeywords(_Keywords):
     """
 
     direction: Literal["both", "forward", "reverse"] = "both"
-    step_size: float = Field(default=0.1, gt=0)
+    step_size: float = Field(default=0.3, gt=0)
     max_steps: int = Field(default=300, ge=1)
     method: Literal["lqa"] = "lqa"
     hessian: HessianSource = "auto"
