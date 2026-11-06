@@ -183,3 +183,25 @@ def test_irc_with_long_steps_still_reaches_the_minima(step):
         for f in (path.frames[0], path.frames[-1])
     )
     assert found == [0, 2]
+
+
+def test_irc_minimize_ends_lands_on_the_minima():
+    out = qcopt.irc(
+        _structure(*MB_SADDLES[0]),
+        SPEC,
+        hessian=True,
+        evaluator=_evaluator(),
+        step_size=0.1,
+        minimize_ends=True,
+    )
+    assert out.success, out.traceback
+    path = out.results
+    ends = sorted(
+        (_xy(path.frames[0].structure), _xy(path.frames[-1].structure)),
+        key=lambda p: p[0],
+    )
+    assert np.allclose(ends[0], MB_MINIMA[0], atol=1e-4)
+    assert np.allclose(ends[1], MB_MINIMA[2], atol=1e-4)
+    info = path.extras["end_minimization"]
+    assert info["forward"]["converged"] and info["reverse"]["converged"]
+    assert np.allclose(_xy(path.transition_state.structure), MB_SADDLES[0])

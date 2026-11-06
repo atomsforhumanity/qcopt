@@ -7,11 +7,12 @@ how rigid motion and frozen atoms are kept out of the steps.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+from qcref import periodic_table as pt
 
 from . import hessians
 from .constraints import ConstraintSet, correction, free_gradient, project
@@ -97,6 +98,7 @@ def optimize(
     *,
     transition_state: bool,
     has_hessian_program: bool,
+    start: tuple[Answer, Array] | None = None,
 ) -> Algorithm:
     """Minimize (RS-RFO) or find a first-order saddle point (RS-P-RFO).
 
@@ -108,6 +110,9 @@ def optimize(
         transition_state: Climb one mode instead of minimizing.
         has_hessian_program: Whether exact Hessians come from a program (else
             finite differences of gradients).
+        start: The calculation already done at ``positions`` and a Cartesian
+            Hessian to start from (such as an IRC branch's updated one); then
+            nothing is computed before the first step.
     """
     count = _Counter()
     n = len(symbols)
@@ -171,7 +176,10 @@ def optimize(
     }
     source = _hessian_source(kw, has_hessian_program, transition_state)
     exact_available = source in ("exact", "finite_difference")
-    (a,) = count((yield [Ask("hessian" if exact_available else "gradient", x)]))
+    if start is not None:
+        a = start[0]
+    else:
+        (a,) = count((yield [Ask("hessian" if exact_available else "gradient", x)]))
     if not a.success:
         return RunResult(
             frames=[a], converged=False, error=f"first calculation failed: {a.error}"
@@ -179,7 +187,9 @@ def optimize(
     frames.append(a)
     coords.at(x)
     g_raw = np.asarray(a.gradient, dtype=float).ravel()
-    if exact_available:
+    if start is not None:
+        h = coords.hessian(x, np.asarray(start[1], dtype=float), g_raw)
+    elif exact_available:
         h = coords.hessian(x, np.asarray(a.hessian, dtype=float), g_raw)
     elif source == "model":
         h = coords.hessian(x, hessians.lindh(numbers, x) + 1e-4 * np.eye(3 * n))
@@ -468,6 +478,40 @@ def _lqa_step(vals: Array, gt: Array, ds: float) -> Array:
     return out
 
 
+def lockstep(
+    algorithms: dict[str, Algorithm],
+) -> Generator[list[Ask], list[Answer], dict[str, Any]]:
+    """Run several algorithms as one: each round's asks of all of them together.
+
+    Returns each algorithm's result by name (an exception raised inside one is its
+    result).
+    """
+    results: dict[str, Any] = {}
+    pending: dict[str, list[Ask]] = {}
+    for name, alg in algorithms.items():
+        try:
+            pending[name] = next(alg)
+        except StopIteration as stop:
+            results[name] = stop.value
+    while pending:
+        order = list(pending)
+        asks = [a for name in order for a in pending[name]]
+        answers = yield asks
+        nxt: dict[str, list[Ask]] = {}
+        k = 0
+        for name in order:
+            mine = answers[k : k + len(pending[name])]
+            k += len(pending[name])
+            try:
+                nxt[name] = algorithms[name].send(mine)
+            except StopIteration as stop:
+                results[name] = stop.value
+            except Exception as exc:  # noqa: BLE001 - reported as that algorithm's result
+                results[name] = exc
+        pending = nxt
+    return results
+
+
 @dataclass
 class _Branch:
     """One direction of an IRC."""
@@ -615,6 +659,44 @@ def irc(
             b.ds = min(kw.step_size, 2.0 * b.ds)
             b.next = next_point(b)
 
+    end_info: dict[str, Any] = {}
+    if kw.minimize_ends:
+        numbers = [int(getattr(pt, sym.capitalize()).number) for sym in symbols]
+        end_kw = OptimizationKeywords(
+            coordinates=kw.end_coordinates,
+            convergence=kw.end_convergence,
+            maxiter=kw.end_maxiter,
+            frozen_atoms=kw.frozen_atoms,
+            hessian="model",
+        )
+        subs = {
+            b.name: optimize(
+                b.x,
+                symbols,
+                numbers,
+                end_kw,
+                transition_state=False,
+                has_hessian_program=has_hessian_program,
+                start=(b.prev, b.h),
+            )
+            for b in branches
+            if b.frames and not (b.reason or "").startswith("gradient failed")
+        }
+        ends = yield from lockstep(subs)  # type: ignore[arg-type]
+        for name, res in ends.items():
+            b = next(b for b in branches if b.name == name)
+            if isinstance(res, BaseException) or not res.frames:
+                end_info[name] = {"converged": False, "error": str(res)}
+                continue
+            end_info[name] = {
+                "converged": res.converged,
+                "n_gradients": res.info.get("n_gradients", 0),
+                "energy_drop": float(b.prev.energy - res.frames[-1].energy),
+            }
+            count.gradients += res.info.get("n_gradients", 0)
+            if res.frames[-1] is not b.frames[-1]:
+                b.frames.append(res.frames[-1])
+
     by_name = {b.name: b for b in branches}
     rev_frames = (
         list(reversed(by_name["reverse"].frames)) if "reverse" in by_name else []
@@ -628,6 +710,7 @@ def irc(
         "n_hessians": count.hessians,
         "branch_end": reasons,
         "branch_steps": {b.name: len(b.frames) for b in branches},
+        "end_minimization": end_info,
         "ts_imaginary_curvature": float(vals[0]),
     }
     return RunResult(

@@ -155,6 +155,13 @@ class IRCKeywords(_Keywords):
             (Hartree/bohr) with positive curvature, or when the energy rises.
         frozen_atoms: Atoms that do not move.
         fd_step: Step (bohr) of finite-difference Hessians.
+        minimize_ends: Minimize both ends after the IRC (both at once, starting
+            from each branch's updated Hessian); the minimized structures become the
+            path's first and last frames. An IRC stops short of the minimum, and
+            the end can turn out to be another species once minimized.
+        end_coordinates: Coordinates of those minimizations.
+        end_convergence: Their convergence criteria.
+        end_maxiter: Their most steps.
     """
 
     direction: Literal["both", "forward", "reverse"] = "both"
@@ -167,3 +174,7 @@ class IRCKeywords(_Keywords):
     gmax: float = Field(default=5e-4, gt=0)
     frozen_atoms: list[int] = []
     fd_step: float = Field(default=0.005, gt=0)
+    minimize_ends: bool = False
+    end_coordinates: Literal["tric", "dlc", "cartesian"] = "tric"
+    end_convergence: Convergence = Convergence()
+    end_maxiter: int = Field(default=500, ge=1)
