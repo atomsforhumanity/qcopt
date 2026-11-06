@@ -454,7 +454,7 @@ def _gs2_step(vals: Array, gt: Array, ds: float) -> Array:
     half = 0.5 * ds
     to_pivot = -half * gt / gnorm
     g_pivot = gt + vals * to_pivot
-    hmin = float(vals.min())
+    hmin = float(np.min(vals))
 
     def size(mu: float) -> float:
         return float(np.linalg.norm(g_pivot / ((vals - hmin) + mu)))
@@ -476,7 +476,9 @@ def _gs2_step(vals: Array, gt: Array, ds: float) -> Array:
     norm = float(np.linalg.norm(p))
     if 0.0 < norm < half:  # hard case: fill the radius along the lowest mode
         k = int(np.argmin(vals))
-        p[k] -= np.sqrt(max(half * half - norm * norm, 0.0)) * (1.0 if gt[k] >= 0 else -1.0)
+        p[k] -= np.sqrt(max(half * half - norm * norm, 0.0)) * (
+            1.0 if gt[k] >= 0 else -1.0
+        )
     return to_pivot + p
 
 
@@ -641,7 +643,7 @@ def irc(
         if kw.method == "gs2":
             sub = np.arange(n_free)  # locked directions carry no gradient and no step
             comp = np.zeros_like(gt)
-            newton = -gt[sub] / hv[sub] if hv[:n_free].min() > 0 else None
+            newton = -gt[sub] / hv[sub] if np.min(hv[:n_free]) > 0 else None
             if newton is not None and float(np.linalg.norm(newton)) <= b.ds:
                 comp[sub] = newton  # the valley's minimum lies within this step
             else:

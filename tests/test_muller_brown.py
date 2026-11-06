@@ -205,3 +205,41 @@ def test_irc_minimize_ends_lands_on_the_minima():
     info = path.extras["end_minimization"]
     assert info["forward"]["converged"] and info["reverse"]["converged"]
     assert np.allclose(_xy(path.transition_state.structure), MB_SADDLES[0])
+
+
+@pytest.mark.parametrize("step", [0.05, 0.2])
+def test_gs2_irc_reaches_the_minima(step):
+    out = qcopt.irc(
+        _structure(*MB_SADDLES[1]),
+        SPEC,
+        hessian=True,
+        evaluator=_evaluator(),
+        method="gs2",
+        step_size=step,
+        gmax=1e-4,
+    )
+    assert out.success, out.traceback
+    path = out.results
+    found = sorted(
+        int(np.argmin([np.linalg.norm(_xy(f.structure) - m) for m in MB_MINIMA]))
+        for f in (path.frames[0], path.frames[-1])
+    )
+    assert found == [1, 2]
+    e = path.energies
+    assert np.all(np.diff(e[: path.ts_index + 1]) > 0)
+    assert np.all(np.diff(e[path.ts_index :]) < 0)
+
+
+def test_gs2_step_lands_on_the_sphere_around_the_pivot():
+    from qcopt.algorithms import _gs2_step
+
+    vals = np.array([0.2, 0.5, 1.3])
+    g = np.array([0.3, -0.1, 0.05])
+    step = _gs2_step(vals, g, 0.4)
+    pivot = -0.2 * g / np.linalg.norm(g)
+    assert np.isclose(np.linalg.norm(step - pivot), 0.2)
+    # the model gradient at the new point points back at the pivot
+    g_new = g + vals * step
+    r = step - pivot
+    cos = (g_new @ r) / (np.linalg.norm(g_new) * np.linalg.norm(r))
+    assert np.isclose(abs(cos), 1.0, atol=1e-8)
