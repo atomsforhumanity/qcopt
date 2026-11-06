@@ -438,6 +438,48 @@ def _with_hessian(answer: Answer, hessian: Array) -> Answer:
 # -------------------------------------------------------------------------- IRC
 
 
+def _gs2_step(vals: Array, gt: Array, ds: float) -> Array:
+    """Gonzalez-Schlegel step of length ``ds`` (eigenbasis components), on the model.
+
+    Gonzalez and Schlegel, J. Chem. Phys. 90, 2154 (1989): from the pivot half a step
+    down the gradient, the next point lies on the sphere of radius ds/2 around the
+    pivot where the gradient points at the pivot, i.e. the lowest point of the
+    sphere. Found on the quadratic model (Hessian ``vals``, gradient ``gt`` at the
+    current point) as a trust-region problem: p = -(H - lambda)^-1 g* with |p| = ds/2
+    and lambda below the lowest eigenvalue, g* the model gradient at the pivot.
+    """
+    gnorm = float(np.linalg.norm(gt))
+    if gnorm == 0.0:
+        return np.zeros_like(gt)
+    half = 0.5 * ds
+    to_pivot = -half * gt / gnorm
+    g_pivot = gt + vals * to_pivot
+    hmin = float(vals.min())
+
+    def size(mu: float) -> float:
+        return float(np.linalg.norm(g_pivot / ((vals - hmin) + mu)))
+
+    lo, hi = 1e-14, max(1.0, abs(hmin)) + float(np.linalg.norm(g_pivot)) / half + 1.0
+    if size(lo) <= half:
+        mu = lo  # hard case: the lowest mode carries no gradient at the pivot
+    else:
+        for _ in range(200):
+            mu = float(np.sqrt(lo * hi))
+            if size(mu) > half:
+                lo = mu
+            else:
+                hi = mu
+            if hi / lo < 1.0 + 1e-12:
+                break
+        mu = hi
+    p = -g_pivot / ((vals - hmin) + mu)
+    norm = float(np.linalg.norm(p))
+    if 0.0 < norm < half:  # hard case: fill the radius along the lowest mode
+        k = int(np.argmin(vals))
+        p[k] -= np.sqrt(max(half * half - norm * norm, 0.0)) * (1.0 if gt[k] >= 0 else -1.0)
+    return to_pivot + p
+
+
 def _lqa_step(vals: Array, gt: Array, ds: float) -> Array:
     """Local quadratic approximation step of arc length ``ds`` (eigenbasis components).
 
@@ -587,7 +629,7 @@ def irc(
     ]
 
     def next_point(b: _Branch) -> Array:
-        """The LQA step of length ``b.ds`` from the branch's last point."""
+        """The next IRC point, ``b.ds`` along the path from the branch's last one."""
         space.at(b.x)
         g_mw = space.project(
             space.gradient_to_space(np.asarray(b.prev.gradient).ravel())
@@ -596,8 +638,18 @@ def irc(
         n_free = len(hv) - space.n_locked
         gt = hvec.T @ g_mw
         gt[n_free:] = 0.0
-        hv = np.where(hv >= LOCKED_CURVATURE * 0.5, 0.0, hv)
-        step_mw = hvec @ _lqa_step(hv, gt, b.ds)
+        if kw.method == "gs2":
+            sub = np.arange(n_free)  # locked directions carry no gradient and no step
+            comp = np.zeros_like(gt)
+            newton = -gt[sub] / hv[sub] if hv[:n_free].min() > 0 else None
+            if newton is not None and float(np.linalg.norm(newton)) <= b.ds:
+                comp[sub] = newton  # the valley's minimum lies within this step
+            else:
+                comp[sub] = _gs2_step(hv[sub], gt[sub], b.ds)
+            step_mw = hvec @ comp
+        else:
+            hv = np.where(hv >= LOCKED_CURVATURE * 0.5, 0.0, hv)
+            step_mw = hvec @ _lqa_step(hv, gt, b.ds)
         return b.x + space.to_cartesian(space.project(step_mw)).reshape(n, 3)
 
     while True:
@@ -650,12 +702,15 @@ def irc(
                 b.h = update(b.h, dx, y)
                 b.since_hessian += 1
             b.frames.append(ans)
+            de_last = abs(float(ans.energy) - float(b.prev.energy))
             b.x, b.prev = np.asarray(ans.positions, dtype=float).reshape(n, 3), ans
             space.at(b.x)
             hv, _ = space.eigh(space.hessian_to_space(b.h))
             n_free = len(hv) - space.n_locked
             g_cart = np.asarray(ans.gradient, dtype=float).ravel() * space.free
-            if max_atomic_norm(g_cart) < kw.gmax and np.min(hv[:n_free]) > -1e-5:
+            if max_atomic_norm(g_cart) < kw.gmax and (
+                np.min(hv[:n_free]) > -1e-5 or de_last < kw.flat_energy
+            ):
                 b.done, b.reason = True, "converged"
                 continue
             if b.steps >= kw.max_steps:

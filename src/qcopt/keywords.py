@@ -150,13 +150,17 @@ class IRCKeywords(_Keywords):
             0.1 did not; a corrector is needed before longer steps are safe.
         max_steps: Most steps per branch.
         method: ``lqa``: local quadratic approximation (Page and McIver, 1988) on
-            the current Hessian.
+            the current Hessian; ``gs2``: Gonzalez and Schlegel's constrained step
+            (1989), each point on the sphere around a pivot half a step down the
+            gradient, found on the quadratic model (one gradient per step).
         hessian: Hessian at the transition state; see OptimizationKeywords.
         hessian_every: Recompute the exact Hessian every this many steps (0: only
             at the transition state, then updated).
         update: Update between exact Hessians.
         gmax: A branch ends when its largest atomic gradient falls below this
-            (Hartree/bohr) with positive curvature, or when the energy rises.
+            (Hartree/bohr) with positive curvature, or with its last step lowering
+            the energy by less than ``flat_energy``.
+        flat_energy: Energy change (Hartree) below which a step counts as flat.
         frozen_atoms: Atoms that do not move.
         fd_step: Step (bohr) of finite-difference Hessians.
         minimize_ends: Minimize both ends after the IRC (both at once, starting
@@ -171,11 +175,12 @@ class IRCKeywords(_Keywords):
     direction: Literal["both", "forward", "reverse"] = "both"
     step_size: float = Field(default=0.1, gt=0)
     max_steps: int = Field(default=300, ge=1)
-    method: Literal["lqa"] = "lqa"
+    method: Literal["gs2", "lqa"] = "lqa"
     hessian: HessianSource = "auto"
     hessian_every: int = Field(default=0, ge=0)
     update: Literal["bofill", "ts_bfgs", "bfgs", "sr1", "psb"] = "bofill"
     gmax: float = Field(default=5e-4, gt=0)
+    flat_energy: float = Field(default=1e-5, gt=0)
     frozen_atoms: list[int] = []
     fd_step: float = Field(default=0.005, gt=0)
     minimize_ends: bool = False
