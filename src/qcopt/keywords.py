@@ -145,9 +145,9 @@ class IRCKeywords(_Keywords):
         step_size: Arc length of each step in mass-weighted coordinates
             (bohr amu^1/2). A step that overshoots the valley floor (the energy
             rises, or the new gradient points along the step) is retried at half the
-            length. Longer steps are cheaper: at g-xTB, 0.3 cost 35% fewer gradients
-            than 0.1 on 100 Reaction-QM IRCs but ended one in another minimum, which
-            0.1 did not; a corrector is needed before longer steps are safe.
+            length. On 100 Reaction-QM IRCs at g-xTB, GS2 at 0.3 reached the same
+            minima as Sella in all 100 with 29% fewer gradients than LQA at 0.1; LQA
+            at 0.3 and GS2 at 0.5 each ended one in another minimum.
         max_steps: Most steps per branch.
         method: ``lqa``: local quadratic approximation (Page and McIver, 1988) on
             the current Hessian; ``gs2``: Gonzalez and Schlegel's constrained step
@@ -175,9 +175,9 @@ class IRCKeywords(_Keywords):
     """
 
     direction: Literal["both", "forward", "reverse"] = "both"
-    step_size: float = Field(default=0.1, gt=0)
+    step_size: float = Field(default=0.3, gt=0)
     max_steps: int = Field(default=300, ge=1)
-    method: Literal["gs2", "lqa"] = "lqa"
+    method: Literal["gs2", "lqa"] = "gs2"
     hessian: HessianSource = "auto"
     hessian_every: int = Field(default=0, ge=0)
     update: Literal["bofill", "ts_bfgs", "bfgs", "sr1", "psb"] = "bofill"

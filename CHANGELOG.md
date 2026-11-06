@@ -23,3 +23,6 @@ All notable changes to this project are documented here. The format follows
 - Constraints on distances, angles and dihedrals; saddle escape for minimizations
   (`escape_saddles`).
 - A qccodec codec, so `qccompute.compute(ProgramInput(program="qcopt", ...))` works.
+- IRCs by Gonzalez-Schlegel steps on the quadratic model (default, step 0.3) or the
+  local quadratic approximation; overshoots retried at half the step; an exact Hessian
+  decides when a small-gradient branch shows negative curvature; `minimize_ends`.
