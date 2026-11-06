@@ -1,0 +1,88 @@
+[project]
+name = "qcopt"
+version = "0.1.0.dev0"
+description = "Geometry optimization, transition-state searches, and IRCs that return qcdata results."
+readme = "README.md"
+authors = [{ name = "Colton Hicks", email = "github@coltonhicks.com" }]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24.0",
+    "qcdata>=0.23.1",
+    "qcref>=0.5.1",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+
+[project.urls]
+Homepage = "https://github.com/atomsforhumanity/qcopt"
+Source = "https://github.com/atomsforhumanity/qcopt"
+Changelog = "https://github.com/atomsforhumanity/qcopt/blob/main/CHANGELOG.md"
+"Bug Tracker" = "https://github.com/atomsforhumanity/qcopt/issues"
+
+[project.optional-dependencies]
+qccompute = ["qccompute>=0.22.0"]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.15",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.12",
+    "pre-commit>=4.0",
+    "pre-commit-hooks>=5.0",
+    "detect-secrets>=1.5",
+    "typos>=1.30",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = ["*.ipynb", "*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "D"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["qcopt", "tests"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+"benchmarks/**" = ["D"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = ["axtb: needs the axtb package"]
+
+[tool.coverage.run]
+branch = true
+source = ["qcopt"]

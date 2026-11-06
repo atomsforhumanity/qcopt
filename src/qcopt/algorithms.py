@@ -1,0 +1,481 @@
+"""The optimizers as generators: minimization, transition-state search, IRC.
+
+Each yields lists of :class:`~qcopt.driver.Ask` and returns a :class:`RunResult`.
+Everything is in Cartesian coordinates (bohr, Hartree); see :mod:`qcopt.space` for
+how rigid motion and frozen atoms are kept out of the steps.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import Any
+
+import numpy as np
+
+from . import hessians
+from .driver import Algorithm, Answer, Ask
+from .geometry import Array, masses, max_atomic_norm, rms
+from .keywords import IRCKeywords, OptimizationKeywords
+from .space import LOCKED_CURVATURE, CartesianSpace
+from .steps import rfo_step, select_mode, update_trust
+from .vibrations import Frequencies, frequencies
+
+
+@dataclass
+class RunResult:
+    """What an algorithm produced.
+
+    Attributes:
+        frames: The answers kept as frames, in order.
+        converged: Whether it met its convergence criteria.
+        error: Why it stopped, when it failed.
+        ts_index: For an IRC, the transition state's position in ``frames``.
+        info: Counts and diagnostics, reported in the result's ``extras``.
+        frequencies: Harmonic analysis of the final structure, if computed.
+    """
+
+    frames: list[Answer]
+    converged: bool
+    error: str | None = None
+    ts_index: int | None = None
+    info: dict[str, Any] = field(default_factory=dict)
+    frequencies: Frequencies | None = None
+
+
+class _Counter:
+    """Counts the gradients and Hessians an algorithm received."""
+
+    def __init__(self) -> None:
+        self.gradients = 0
+        self.hessians = 0
+
+    def __call__(self, answers: list[Answer]) -> list[Answer]:
+        for a in answers:
+            if a.hessian is not None:
+                self.hessians += 1
+                if a.n_gradients > 1:
+                    self.gradients += a.n_gradients
+            else:
+                self.gradients += 1
+        return answers
+
+
+def _hessian_source(
+    kw: OptimizationKeywords | IRCKeywords, has_program: bool, ts: bool
+) -> str:
+    if kw.hessian != "auto":
+        return kw.hessian
+    if has_program:
+        return "exact"
+    return "finite_difference" if ts else "model"
+
+
+def _converged(
+    kw: OptimizationKeywords, gp: Array, step: Array | None, de: float | None
+) -> bool:
+    conv = kw.convergence
+    if max_atomic_norm(gp) > conv.gmax:
+        return False
+    if conv.grms is not None and rms(gp) > conv.grms:
+        return False
+    if conv.dmax is not None and (step is None or max_atomic_norm(step) > conv.dmax):
+        return False
+    if conv.energy is not None and (de is None or abs(de) > conv.energy):
+        return False
+    return True
+
+
+def optimize(
+    positions: Array,
+    symbols: Sequence[str],
+    numbers: Sequence[int],
+    kw: OptimizationKeywords,
+    *,
+    transition_state: bool,
+    has_hessian_program: bool,
+) -> Algorithm:
+    """Minimize (RS-RFO) or find a first-order saddle point (RS-P-RFO).
+
+    Args:
+        positions: Starting geometry (bohr).
+        symbols: Element symbols.
+        numbers: Atomic numbers (for the model Hessian).
+        kw: Keywords.
+        transition_state: Climb one mode instead of minimizing.
+        has_hessian_program: Whether exact Hessians come from a program (else
+            finite differences of gradients).
+    """
+    count = _Counter()
+    n = len(symbols)
+    x = np.asarray(positions, dtype=float).reshape(n, 3)
+    space = CartesianSpace(n, frozen=kw.frozen_atoms)
+
+    def _size(dx: Array) -> float:
+        return (
+            max_atomic_norm(dx)
+            if kw.trust_type == "atomic"
+            else float(np.linalg.norm(dx))
+        )
+
+    frames: list[Answer] = []
+    info: dict[str, Any] = {"rejected_steps": 0, "hessian_recomputes": 0}
+    source = _hessian_source(kw, has_hessian_program, transition_state)
+    exact_available = source in ("exact", "finite_difference")
+    (a,) = count((yield [Ask("hessian" if exact_available else "gradient", x)]))
+    if not a.success:
+        return RunResult(
+            frames=[a], converged=False, error=f"first calculation failed: {a.error}"
+        )
+    frames.append(a)
+    if exact_available:
+        h = np.asarray(a.hessian, dtype=float)
+    elif source == "model":
+        h = hessians.lindh(numbers, x) + 1e-4 * np.eye(3 * n)
+    else:
+        h = 0.5 * np.eye(3 * n)
+    update_name = (
+        kw.update
+        if kw.update != "auto"
+        else ("ts_bfgs" if transition_state else "bfgs")
+    )
+    update = hessians.UPDATES[update_name]
+
+    mode_ref = None if kw.mode is None else np.asarray(kw.mode, dtype=float).ravel()
+    trust = kw.trust
+    rejections = 0
+    failures = 0
+    converged = False
+    last_step: Array | None = None
+    last_de: float | None = None
+    steps_since_hessian = 0
+    vals: Array | None = None
+    for _ in range(kw.maxiter):
+        g = np.asarray(a.gradient, dtype=float).ravel()
+        space.at(x)
+        gp = space.project(g)
+        if _converged(kw, gp, last_step, last_de):
+            converged = True
+            break
+        vals, vecs = space.eigh(h)
+        n_free = len(vals) - space.n_locked
+        if (
+            transition_state
+            and exact_available
+            and kw.recompute_hessian_on_loss
+            and steps_since_hessian >= kw.min_steps_between_hessians
+            and vals[0] >= 0.0
+        ):
+            (ha,) = count((yield [Ask("hessian", x)]))
+            if ha.success:
+                h = np.asarray(ha.hessian, dtype=float)
+                frames[-1] = _with_hessian(frames[-1], h)
+                info["hessian_recomputes"] += 1
+                steps_since_hessian = 0
+                vals, vecs = space.eigh(h)
+        mode = None
+        if transition_state:
+            if mode_ref is None:
+                mode = 0
+            else:
+                mode = select_mode(vecs, vals, space.project(mode_ref), n_free)
+                if kw.follow == "overlap":
+                    mode_ref = vecs[:, mode]
+                else:
+                    mode_ref = None
+        step = rfo_step(
+            vals, vecs, gp, trust, mode=mode, atomic=kw.trust_type == "atomic"
+        )
+        dx = space.project(step.dx)
+        x_new = x + dx.reshape(n, 3)
+        (b,) = count((yield [Ask("gradient", x_new)]))
+        if not b.success:
+            failures += 1
+            if failures > 3 or trust <= kw.trust_min:
+                return RunResult(
+                    frames=frames + [b],
+                    converged=False,
+                    error=f"gradient failed: {b.error}",
+                    info=info,
+                )
+            trust = max(kw.trust_min, 0.25 * min(trust, _size(dx)))
+            continue
+        failures = 0
+        de = b.energy - a.energy
+        ratio = de / step.predicted if abs(step.predicted) > 1e-14 else 1.0
+        norm = _size(dx)
+        trust = update_trust(
+            trust,
+            ratio,
+            norm,
+            minimum=kw.trust_min,
+            maximum=kw.trust_max,
+            ts=transition_state,
+        )
+        y = space.project(np.asarray(b.gradient, dtype=float).ravel()) - gp
+        if update_name == "bfgs" and kw.update == "auto" and vals[0] < -1e-10:
+            h = hessians.bofill(h, dx, y)  # BFGS cannot fix negative curvature
+        else:
+            h = update(h, dx, y)
+        reject = (
+            not transition_state
+            and de > 1e-10
+            and ratio < 0.0
+            and rejections < kw.max_rejections
+            and norm > kw.trust_min
+        )
+        if reject:
+            rejections += 1
+            info["rejected_steps"] += 1
+            trust = max(kw.trust_min, min(trust, 0.5 * norm))
+            continue
+        rejections = 0
+        x, a = x_new, b
+        frames.append(b)
+        last_step, last_de = dx, de
+        steps_since_hessian += 1
+        if (
+            exact_available
+            and kw.hessian_every
+            and steps_since_hessian >= kw.hessian_every
+        ):
+            (ha,) = count((yield [Ask("hessian", x)]))
+            if ha.success:
+                h = np.asarray(ha.hessian, dtype=float)
+                frames[-1] = _with_hessian(frames[-1], h)
+                info["hessian_recomputes"] += 1
+                steps_since_hessian = 0
+    else:
+        space.at(x)
+        converged = _converged(
+            kw, space.project(np.asarray(a.gradient).ravel()), last_step, last_de
+        )
+
+    freqs = None
+    if kw.frequencies:
+        (ha,) = count((yield [Ask("hessian", x)]))
+        if ha.success:
+            frames[-1] = _with_hessian(frames[-1], np.asarray(ha.hessian))
+            freqs = frequencies(
+                np.asarray(ha.hessian), symbols, x, frozen=kw.frozen_atoms
+            )
+            info["n_imaginary"] = freqs.n_imaginary(kw.imaginary_cutoff)
+    info.update(
+        n_gradients=count.gradients,
+        n_hessians=count.hessians,
+        n_steps=len(frames) - 1,
+        final_trust=trust,
+        gmax=max_atomic_norm(space.project(np.asarray(a.gradient).ravel())),
+        hessian=source,
+        update=update_name,
+    )
+    error = None if converged else f"not converged in {kw.maxiter} steps"
+    return RunResult(
+        frames=frames, converged=converged, error=error, info=info, frequencies=freqs
+    )
+
+
+def _with_hessian(answer: Answer, hessian: Array) -> Answer:
+    return Answer(
+        positions=answer.positions,
+        energy=answer.energy,
+        gradient=answer.gradient,
+        hessian=np.asarray(hessian, dtype=float),
+        success=answer.success,
+        error=answer.error,
+        output=answer.output,
+        program=answer.program,
+        program_version=answer.program_version,
+        n_gradients=answer.n_gradients,
+    )
+
+
+# -------------------------------------------------------------------------- IRC
+
+
+def _lqa_step(vals: Array, gt: Array, ds: float) -> Array:
+    """Local quadratic approximation step of arc length ``ds`` (eigenbasis components).
+
+    Page and McIver, J. Chem. Phys. 88, 922 (1988): the steepest-descent path on the
+    quadratic surface, x_i(t) = g_i (exp(-l_i t) - 1) / l_i, followed until its arc
+    length is ``ds``.
+    """
+    active = np.abs(gt) > 0
+    lam, g = vals[active], gt[active]
+
+    def speed(t: Array) -> Array:
+        e = np.exp(np.clip(-np.outer(t, lam), -100, 100))
+        return np.sqrt(((g * e) ** 2).sum(axis=1))
+
+    gnorm = float(np.linalg.norm(g))
+    if gnorm == 0.0:
+        return np.zeros_like(gt)
+    t_end = 2.0 * ds / gnorm
+    for _ in range(60):
+        ts = np.linspace(0.0, t_end, 501)
+        v = speed(ts)
+        s = np.concatenate([[0.0], np.cumsum(0.5 * (v[1:] + v[:-1]) * np.diff(ts))])
+        if s[-1] >= ds:
+            t = float(np.interp(ds, s, ts))
+            break
+        t_end *= 2.0
+    else:
+        t = t_end
+    with np.errstate(divide="ignore", invalid="ignore"):
+        small = np.abs(lam * t) < 1e-8
+        comp = np.where(
+            small,
+            -g * t,
+            g * np.expm1(np.clip(-lam * t, -100, 100)) / np.where(small, 1.0, lam),
+        )
+    out = np.zeros_like(gt)
+    out[active] = comp
+    return out
+
+
+@dataclass
+class _Branch:
+    """One direction of an IRC."""
+
+    name: str
+    x: Array
+    prev: Answer
+    h: Array
+    next: Array
+    frames: list[Answer] = field(default_factory=list)
+    done: bool = False
+    reason: str | None = None
+    since_hessian: int = 0
+    steps: int = 0
+
+
+def irc(
+    positions: Array,
+    symbols: Sequence[str],
+    kw: IRCKeywords,
+    *,
+    has_hessian_program: bool,
+) -> Algorithm:
+    """Follow the IRC down both sides of a transition state.
+
+    Mass-weighted Cartesian coordinates with rigid motion projected out, so the path
+    stays in the input's frame. The first step goes along the Hessian's negative
+    mode; later steps follow the local quadratic approximation on the current
+    Hessian (exact at the transition state, then updated). Both branches advance
+    together.
+    """
+    count = _Counter()
+    n = len(symbols)
+    m = masses(symbols)
+    x0 = np.asarray(positions, dtype=float).reshape(n, 3)
+    space = CartesianSpace(n, frozen=kw.frozen_atoms, masses=m)
+    (ts,) = count((yield [Ask("hessian", x0)]))
+    if not ts.success:
+        return RunResult(
+            frames=[ts],
+            converged=False,
+            error=f"Hessian at the transition state failed: {ts.error}",
+        )
+    h0 = np.asarray(ts.hessian, dtype=float)
+    space.at(x0)
+    vals, vecs = space.eigh(space.hessian_to_space(h0))
+    if vals[0] >= 0:
+        return RunResult(
+            frames=[ts],
+            converged=False,
+            error="the starting structure has no negative curvature",
+        )
+    v = vecs[:, 0]
+    v = v * np.sign(v[np.argmax(np.abs(v))])
+    exact_available = _hessian_source(kw, has_hessian_program, True) in (
+        "exact",
+        "finite_difference",
+    )
+    update = hessians.UPDATES[kw.update]
+
+    signs = {"forward": [1.0], "reverse": [-1.0], "both": [1.0, -1.0]}[kw.direction]
+    branches = [
+        _Branch(
+            name="forward" if sign > 0 else "reverse",
+            x=x0,
+            prev=ts,
+            h=h0.copy(),
+            next=x0 + space.to_cartesian(sign * kw.step_size * v).reshape(n, 3),
+        )
+        for sign in signs
+    ]
+    while True:
+        active = [b for b in branches if not b.done]
+        if not active:
+            break
+        asks = []
+        for b in active:
+            want_h = bool(
+                exact_available
+                and kw.hessian_every
+                and b.since_hessian + 1 >= kw.hessian_every
+            )
+            asks.append(Ask("hessian" if want_h else "gradient", b.next))
+        answers = count((yield asks))
+        for b, ans in zip(active, answers, strict=True):
+            b.steps += 1
+            if not ans.success:
+                b.done, b.reason = True, f"gradient failed: {ans.error}"
+                continue
+            if ans.energy > b.prev.energy + 1e-10 and b.frames:
+                b.done, b.reason = True, "energy rose"
+                continue
+            dx = (np.asarray(ans.positions) - b.x).ravel()
+            if ans.hessian is not None:
+                b.h = np.asarray(ans.hessian, dtype=float)
+                b.since_hessian = 0
+            else:
+                y = (
+                    np.asarray(ans.gradient).ravel()
+                    - np.asarray(b.prev.gradient).ravel()
+                )
+                b.h = update(b.h, dx, y)
+                b.since_hessian += 1
+            b.frames.append(ans)
+            b.x, b.prev = np.asarray(ans.positions, dtype=float).reshape(n, 3), ans
+            space.at(b.x)
+            g_mw = space.project(
+                space.gradient_to_space(np.asarray(ans.gradient).ravel())
+            )
+            hv, hvec = space.eigh(space.hessian_to_space(b.h))
+            n_free = len(hv) - space.n_locked
+            g_cart = np.asarray(ans.gradient, dtype=float).ravel() * space.free
+            if max_atomic_norm(g_cart) < kw.gmax and np.min(hv[:n_free]) > -1e-5:
+                b.done, b.reason = True, "converged"
+                continue
+            if b.steps >= kw.max_steps:
+                b.done, b.reason = True, "max_steps"
+                continue
+            gt = hvec.T @ g_mw
+            gt[n_free:] = 0.0
+            hv = np.where(hv >= LOCKED_CURVATURE * 0.5, 0.0, hv)
+            step_mw = hvec @ _lqa_step(hv, gt, kw.step_size)
+            b.next = b.x + space.to_cartesian(space.project(step_mw)).reshape(n, 3)
+
+    by_name = {b.name: b for b in branches}
+    rev_frames = (
+        list(reversed(by_name["reverse"].frames)) if "reverse" in by_name else []
+    )
+    fwd_frames = by_name["forward"].frames if "forward" in by_name else []
+    frames = rev_frames + [ts] + fwd_frames
+    reasons = {b.name: b.reason for b in branches}
+    failed = [r for r in reasons.values() if r and r.startswith("gradient failed")]
+    info = {
+        "n_gradients": count.gradients,
+        "n_hessians": count.hessians,
+        "branch_end": reasons,
+        "branch_steps": {b.name: len(b.frames) for b in branches},
+        "ts_imaginary_curvature": float(vals[0]),
+    }
+    return RunResult(
+        frames=frames,
+        converged=not failed,
+        error=failed[0] if failed else None,
+        ts_index=len(rev_frames),
+        info=info,
+    )
