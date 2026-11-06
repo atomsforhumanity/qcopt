@@ -9,6 +9,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.24.0",
+    "pydantic>=2.0",
     "qcdata>=0.23.1",
     "qcref>=0.5.1",
 ]
