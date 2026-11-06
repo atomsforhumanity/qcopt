@@ -200,6 +200,7 @@ def run_geometric(calc: Counted, sym, x0, task, gmax, maxiter, extra):
     mol = geometric.molecule.Molecule()
     mol.elem = list(sym)
     mol.xyzs = [x0 * BOHR]
+    mol.build_topology()  # geomeTRIC's IRC asks for the molecule's fragments
     use_h = not extra.get("no_hessian", False)
     with tempfile.TemporaryDirectory() as d:
         kw = {}
@@ -257,6 +258,13 @@ def irc_check(a, sym, frames):
     for x in (frames[0], frames[-1]):
         c2 = Counted(a.method, sym, x)
         ev = qcopt.FunctionEvaluator(c2.gradient, c2.hessian, name="axtb")
+        from qcopt.keywords import OptimizationKeywords
+
+        same = (
+            {"coordinates": "cartesian"}
+            if "coordinates" in OptimizationKeywords.model_fields
+            else {}
+        )
         m = qcopt.minimize(
             Structure(symbols=sym, geometry=x),
             {"program": "axtb"},
@@ -264,8 +272,12 @@ def irc_check(a, sym, frames):
             evaluator=ev,
             frequencies=True,
             maxiter=2000,
+            **same,  # the same end minimization for every optimizer and round
         )
         ends.append(m.results.final_structure.geometry)
+        out["end_min_grads"] = out.get("end_min_grads", 0) + c2.n_grad
+        out["end_min_hess"] = out.get("end_min_hess", 0) + c2.n_hess
+        out["end_min_seconds"] = out.get("end_min_seconds", 0.0) + c2.t_grad + c2.t_hess
         out.setdefault("end_n_imaginary", []).append(
             m.results.extras.get("n_imaginary")
         )
@@ -279,7 +291,7 @@ def irc_check(a, sym, frames):
     graphs = [bonds(sym, e) for e in ends]
     raw = [bonds(sym, np.asarray(f)) for f in (frames[0], frames[-1])]
     out["ends_changed_on_minimization"] = [
-        bool((g != r).any()) for g, r in zip(graphs, raw)
+        bool((g != r).any()) for g, r in zip(graphs, raw, strict=False)
     ]
     if a.reactant and a.product:
         import networkx as nx
@@ -288,7 +300,7 @@ def irc_check(a, sym, frames):
             g = nx.Graph()
             for i, e in enumerate(symbols):
                 g.add_node(i, element=e)
-            g.add_edges_from(zip(*np.nonzero(np.triu(adj))))
+            g.add_edges_from(zip(*np.nonzero(np.triu(adj)), strict=False))
             return g
 
         def same(g1, g2):
@@ -309,7 +321,69 @@ def irc_check(a, sym, frames):
     return out
 
 
-RUNNERS = {"qcopt": run_qcopt, "sella": run_sella, "geometric": run_geometric}
+def run_optking(calc: Counted, sym, x0, task, gmax, maxiter, extra):
+    """OptKing's own driver (optimize.optimize) with a computer that calls axtb.
+
+    Its step-by-step CustomHelper breaks when OptKing rebuilds its coordinates
+    (the Hessian keeps the old size), so the full driver is used.
+    """
+    import logging
+
+    from optking import molsys as ok_molsys
+    from optking.compute_wrappers import UserComputer
+    from optking.optimize import optimize as ok_optimize
+    from optking.optwrapper import initialize_options
+
+    logging.getLogger("optking").setLevel(logging.CRITICAL)
+    extra = dict(extra)
+    use_h = not extra.pop("no_hessian", False)
+
+    class AxtbComputer(UserComputer):
+        def _compute(self, driver):
+            g = np.asarray(self.molecule["geometry"], dtype=float).reshape(-1, 3)
+            e, grad = calc.gradient(g)
+            self.external_energy = e
+            self.external_gradient = grad.ravel()
+            if driver == "hessian":
+                self.external_hessian = calc.hessian(g)
+            return super()._compute(driver)
+
+    mol = {
+        "symbols": list(sym),
+        "geometry": np.asarray(x0).ravel().tolist(),
+        "fix_com": True,
+        "fix_orientation": True,
+    }
+    initialize_options(
+        {
+            "opt_type": "TS" if task == "ts" else "MIN",
+            "geom_maxiter": maxiter,
+            "max_force_g_convergence": gmax,  # on internal-coordinate forces
+            "full_hess_every": 0 if use_h else -1,
+            **extra,
+        },
+        silent=True,
+    )
+    molsys = ok_molsys.Molsys.from_schema(mol)
+    computer = AxtbComputer(
+        dict(mol), {"method": "gxtb", "basis": "none"}, {}, "axtb", {}, 1
+    )
+    out = ok_optimize(molsys, computer)
+    ok = bool(out.get("success", False))
+    traj = out.get("trajectory") or []
+    if not traj:
+        return False, None, None, str(out.get("error"))
+    x = np.asarray(traj[-1]["molecule"]["geometry"], dtype=float).reshape(-1, 3)
+    err = None if ok else str(out.get("error"))
+    return ok, x, len(traj), err
+
+
+RUNNERS = {
+    "qcopt": run_qcopt,
+    "sella": run_sella,
+    "geometric": run_geometric,
+    "optking": run_optking,
+}
 
 
 def main() -> None:
@@ -346,6 +420,8 @@ def main() -> None:
     elif a.optimizer == "sella":
         import ase  # noqa: F401
         import sella  # noqa: F401
+    elif a.optimizer == "optking":
+        import optking  # noqa: F401
     else:
         import geometric.optimize  # noqa: F401
     t0 = time.perf_counter()
