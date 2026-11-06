@@ -79,3 +79,31 @@ def test_lockstep_minimizations_match_single_runs():
             b.results.final_structure.geometry,
             atol=1e-10,
         )
+
+
+GXTB = {
+    "program": "axtb",
+    "model": {"method": "gxtb-v2.0.1"},
+    "keywords": {"accuracy": 0.01},  # SCF noise well below the convergence threshold
+}
+
+
+def test_gxtb_ts_from_gfn2_hessians():
+    """g-xTB gradients with GFN2 Hessians: frames hold g-xTB energies throughout."""
+    ts = qcopt.find_ts(HCN_TS_GUESS, GXTB, hessian=GFN2, hessian_every=2)
+    assert ts.success, ts.traceback
+    ex = ts.results.extras
+    assert ex["n_hessians"] >= 2
+    check = axtb.Calculator(
+        "gxtb-v2.0.1", [6, 7, 1], ts.results.frames[0].structure.geometry, accuracy=0.01
+    )
+    for frame in (ts.results.frames[0], ts.results.frames[-1]):
+        e = check.singlepoint(frame.structure.geometry)["energy"]
+        assert frame.results.energy == pytest.approx(e, abs=1e-7)
+        assert frame.results.hessian is None
+    # A g-xTB Hessian at the result: still a first-order saddle.
+    h = check.hessian(ts.results.final_structure.geometry, vibrations=False)["hessian"]
+    f = qcopt.frequencies(
+        np.asarray(h), ["C", "N", "H"], ts.results.final_structure.geometry
+    )
+    assert f.n_imaginary(10.0) == 1

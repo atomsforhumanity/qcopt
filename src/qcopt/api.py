@@ -14,6 +14,7 @@ import socket
 import time
 import traceback
 from collections.abc import Sequence
+from dataclasses import replace
 from importlib import metadata
 from typing import Any, overload
 
@@ -56,6 +57,13 @@ def _subprogram(inp: ProgramInput, calctype: CalcType) -> ProgramSpec | None:
     return None
 
 
+def _separate(grad: ProgramSpec, hess: ProgramSpec | None) -> bool:
+    """Whether Hessians come from another program or method than the gradients."""
+    return hess is not None and (
+        hess.program != grad.program or hess.model != grad.model
+    )
+
+
 def _prepare(inp: ProgramInput) -> tuple[TaskContext, Any]:
     if inp.program != PROGRAM:
         raise ValueError(f"qcopt runs program='qcopt' inputs, not {inp.program!r}.")
@@ -84,6 +92,7 @@ def _prepare(inp: ProgramInput) -> tuple[TaskContext, Any]:
         gradient_spec=grad,
         hessian_spec=hess,
         fd_step=kw.fd_step,
+        separate_hessian=_separate(grad, hess),
         extras={"structure": s},
     )
     return ctx, kw
@@ -105,7 +114,14 @@ def _algorithm(inp: ProgramInput, ctx: TaskContext, kw: Any) -> algorithms.Algor
     )
 
 
-def _frame(a: Answer, structure: Structure) -> Frame:
+def _frame(a: Answer, structure: Structure, keep_hessian: bool = True) -> Frame:
+    """A qcdata frame for one answer.
+
+    ``keep_hessian=False`` leaves out a Hessian computed by a separate (lower-level)
+    program, which does not belong to this frame's method.
+    """
+    if not keep_hessian and a.hessian is not None:
+        a = replace(a, hessian=None)
     out = a.output
     if isinstance(out, ProgramOutput):
         frame = Frame.from_output(out)
@@ -154,7 +170,9 @@ def _output(
             results=data,
             execution=execution,
         )
-    frames = [_frame(a, s) for a in result.frames]
+    gspec = _subprogram(inp, CalcType.gradient)
+    keep = gspec is None or not _separate(gspec, _subprogram(inp, CalcType.hessian))
+    frames = [_frame(a, s, keep) for a in result.frames]
     extras = dict(result.info)
     extras["converged"] = result.converged
     if result.frequencies is not None:
@@ -234,6 +252,12 @@ def _input(
     hessian: ProgramSpec | dict[str, Any] | bool | None,
     keywords: dict[str, Any],
 ) -> ProgramInput:
+    if not (hessian is None or isinstance(hessian, (bool, ProgramSpec, dict))):
+        raise TypeError(
+            "hessian= names the program computing Hessians (True: the gradient "
+            "program; or a ProgramSpec or dict), not "
+            f"{hessian!r}; the starting Hessian is the keyword initial_hessian="
+        )
     gspec = (
         gradient
         if isinstance(gradient, ProgramSpec)
@@ -263,7 +287,14 @@ def minimize(
     evaluator: Any = None,
     **keywords: Any,
 ) -> ProgramOutput[ProgramInput, OptimizationData]:
-    """Minimize ``structure``; ``hessian=True`` uses the gradient program's Hessians."""
+    """Minimize ``structure``; ``hessian=True`` uses the gradient program's Hessians.
+
+    ``hessian`` is the program computing Hessians: True for the gradient program,
+    or a ``ProgramSpec`` or dict for another one (such as a cheaper method; the
+    frames keep the gradient program's energies and gradients). Other keyword
+    arguments are qcopt's keywords (:class:`qcopt.keywords.OptimizationKeywords`), for example
+    ``initial_hessian``.
+    """
     inp = _input(CalcType.optimization, structure, gradient, hessian, keywords)
     return run(inp, evaluator=evaluator)
 
@@ -276,7 +307,14 @@ def find_ts(
     evaluator: Any = None,
     **keywords: Any,
 ) -> ProgramOutput[ProgramInput, OptimizationData]:
-    """Optimize a transition-state guess to a first-order saddle point."""
+    """Optimize a transition-state guess to a first-order saddle point.
+
+    ``hessian`` is the program computing Hessians: True for the gradient program,
+    or a ``ProgramSpec`` or dict for another one (such as a cheaper method; the
+    frames keep the gradient program's energies and gradients). Other keyword
+    arguments are qcopt's keywords (:class:`qcopt.keywords.OptimizationKeywords`), for example
+    ``initial_hessian``.
+    """
     inp = _input(CalcType.transition_state, structure, gradient, hessian, keywords)
     return run(inp, evaluator=evaluator)
 
@@ -289,6 +327,13 @@ def irc(
     evaluator: Any = None,
     **keywords: Any,
 ) -> ProgramOutput[ProgramInput, PathData]:
-    """Follow the IRC down both sides of a transition state."""
+    """Follow the IRC down both sides of a transition state.
+
+    ``hessian`` is the program computing Hessians: True for the gradient program,
+    or a ``ProgramSpec`` or dict for another one (such as a cheaper method; the
+    frames keep the gradient program's energies and gradients). Other keyword
+    arguments are qcopt's keywords (:class:`qcopt.keywords.IRCKeywords`), for example
+    ``initial_hessian``.
+    """
     inp = _input(CalcType.irc, structure, gradient, hessian, keywords)
     return run(inp, evaluator=evaluator)

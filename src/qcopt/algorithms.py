@@ -58,7 +58,9 @@ class _Counter:
         for a in answers:
             if a.hessian is not None:
                 self.hessians += 1
-                if a.n_gradients > 1:
+                # Finite differences took gradients; a Hessian from a separate program
+                # came with the gradient program's gradient (0 when it was reused).
+                if a.n_gradients > 1 or a.hessian_answer is not None:
                     self.gradients += a.n_gradients
             else:
                 self.gradients += 1
@@ -68,8 +70,8 @@ class _Counter:
 def _hessian_source(
     kw: OptimizationKeywords | IRCKeywords, has_program: bool, ts: bool
 ) -> str:
-    if kw.hessian != "auto":
-        return kw.hessian
+    if kw.initial_hessian != "auto":
+        return kw.initial_hessian
     if has_program:
         return "exact"
     return "finite_difference" if ts else "model"
@@ -745,7 +747,7 @@ def irc(
             convergence=kw.end_convergence,
             maxiter=kw.end_maxiter,
             frozen_atoms=kw.frozen_atoms,
-            hessian="model",
+            initial_hessian="model",
         )
         subs = {
             b.name: optimize(

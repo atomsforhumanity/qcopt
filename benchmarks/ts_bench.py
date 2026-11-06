@@ -45,11 +45,13 @@ class Counted:
         pos_bohr: np.ndarray,
         charge: int = 0,
         mult: int = 1,
+        accuracy: float | None = None,
     ):
         self.symbols = symbols
         numbers = [int(getattr(pt, s.capitalize()).number) for s in symbols]
+        kw = {} if accuracy is None else {"accuracy": accuracy}
         self.calc = axtb.Calculator(
-            method, numbers, pos_bohr, charge=float(charge), uhf=mult - 1
+            method, numbers, pos_bohr, charge=float(charge), uhf=mult - 1, **kw
         )
         self.n_grad = 0
         self.n_hess = 0
@@ -256,7 +258,7 @@ def irc_check(a, sym, frames):
     out = {"n_frames": len(frames)}
     ends = []
     for x in (frames[0], frames[-1]):
-        c2 = Counted(a.method, sym, x)
+        c2 = Counted(a.method, sym, x, accuracy=a.accuracy)
         ev = qcopt.FunctionEvaluator(c2.gradient, c2.hessian, name="axtb")
         from qcopt.keywords import OptimizationKeywords
 
@@ -284,7 +286,10 @@ def irc_check(a, sym, frames):
         out.setdefault("end_energy", []).append(float(m.results.final_energy))
         out.setdefault("end_drop_kcal", []).append(
             float(
-                (Counted(a.method, sym, x).gradient(x)[0] - m.results.final_energy)
+                (
+                    Counted(a.method, sym, x, accuracy=a.accuracy).gradient(x)[0]
+                    - m.results.final_energy
+                )
                 * 627.5094740631
             )
         )
@@ -396,19 +401,27 @@ def main() -> None:
     p.add_argument("--product")
     p.add_argument("--method", default="gxtb-v2.0.1")
     p.add_argument("--fmax-ev", type=float, default=0.001)
+    p.add_argument(
+        "--accuracy",
+        type=float,
+        default=0.01,
+        help="axtb SCF accuracy, passed explicitly (its default, 1.0, leaves ~1e-5 "
+        "Eh/bohr of gradient noise, the size of the 0.001 eV/A threshold)",
+    )
     p.add_argument("--maxiter", type=int, default=1000)
     p.add_argument("--extra", default="{}", help="JSON of optimizer-specific options")
     a = p.parse_args()
     extra = json.loads(a.extra)
     sym, x0 = read_xyz(a.xyz)
     gmax = a.fmax_ev / EV * BOHR
-    calc = Counted(a.method, sym, x0)
+    calc = Counted(a.method, sym, x0, accuracy=a.accuracy)
     rec = {
         "optimizer": a.optimizer,
         "xyz": a.xyz,
         "task": a.task,
         "method": a.method,
         "fmax_ev": a.fmax_ev,
+        "accuracy": a.accuracy,
         "n_atoms": len(sym),
         "extra": extra,
     }
@@ -453,7 +466,7 @@ def main() -> None:
     elif x is not None:
         import qcopt
 
-        check = Counted(a.method, sym, x)
+        check = Counted(a.method, sym, x, accuracy=a.accuracy)
         e, g = check.gradient(x)
         h = check.hessian(x)
         f = qcopt.frequencies(h, sym, x)

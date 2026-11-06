@@ -70,13 +70,22 @@ class OptimizationKeywords(_Keywords):
             internals with fragments joined by extra bonds; ``cartesian``:
             Cartesians without rigid motion. Internals fall back to Cartesians when
             atoms are frozen or the structure cannot be described.
-        hessian: The starting Hessian. ``auto``: the Hessian subprogram's when one is
-            given, else Lindh's model for minima and finite differences of gradients
-            for transition states. ``exact`` needs a Hessian subprogram, or uses
-            finite differences of gradients.
-        hessian_every: Recompute the exact Hessian every this many steps (0: never).
-        recompute_hessian_on_loss: Transition states: recompute the exact Hessian when
-            the updated one has lost its negative eigenvalue.
+        initial_hessian: The starting Hessian. ``auto``: the Hessian subprogram's
+            when one is given, else Lindh's model for minima and finite differences of
+            gradients for transition states. ``exact`` needs a Hessian subprogram, or
+            uses finite differences of gradients. The Hessian subprogram may use a
+            cheaper method than the gradients (such as GFN2-xTB Hessians for g-xTB or
+            g-xTB Hessians for DFT); every frame still holds the gradient program's
+            energy and gradient. On 100 Reaction-QM transition states at g-xTB, GFN2
+            starting Hessians halved the total time and found a first-order saddle in
+            all 100 (98 the same as from the exact start).
+        hessian_every: Recompute the Hessian every this many steps (0: never). On the
+            same benchmark at g-xTB, where a Hessian costs about 38 gradients, every
+            schedule tried (1, 3, 5) cost more than the default; with a lower-level
+            Hessian program it also replaces the updated Hessian, which loses the target
+            method's curvature (GFN2 every step: 67 of 100 g-xTB saddles).
+        recompute_hessian_on_loss: Transition states: recompute the Hessian when the
+            updated one has lost its negative eigenvalue.
         min_steps_between_hessians: Steps between such recomputations, at least.
         lost_curvature: The negative mode counts as lost once its curvature is above
             minus this (Hartree/bohr^2, or per internal unit).
@@ -101,7 +110,8 @@ class OptimizationKeywords(_Keywords):
         max_rejections: Minimizations: most consecutive steps undone because the
             energy rose, before the run continues anyway.
         frequencies: Compute the Hessian at the final structure and report its
-            harmonic frequencies and number of imaginary modes.
+            harmonic frequencies and number of imaginary modes (from the Hessian
+            subprogram, or finite differences of gradients without one).
         escape_saddles: Minimizations: check the converged structure's frequencies
             and, if it is a saddle point, step off it along the lowest mode and
             minimize again, up to this many times (0: no check).
@@ -113,7 +123,7 @@ class OptimizationKeywords(_Keywords):
     maxiter: int = Field(default=500, ge=1)
     convergence: Convergence = Convergence()
     coordinates: Literal["tric", "dlc", "cartesian"] = "tric"
-    hessian: HessianSource = "auto"
+    initial_hessian: HessianSource = "auto"
     hessian_every: int = Field(default=0, ge=0)
     recompute_hessian_on_loss: bool = True
     min_steps_between_hessians: int = Field(default=3, ge=1)
@@ -154,7 +164,7 @@ class IRCKeywords(_Keywords):
             the current Hessian; ``gs2``: Gonzalez and Schlegel's constrained step
             (1989), each point on the sphere around a pivot half a step down the
             gradient, found on the quadratic model (one gradient per step).
-        hessian: Hessian at the transition state; see OptimizationKeywords.
+        initial_hessian: Hessian at the transition state; see OptimizationKeywords.
         hessian_every: Recompute the exact Hessian every this many steps (0: only
             at the transition state, then updated).
         update: Update between exact Hessians.
@@ -179,7 +189,7 @@ class IRCKeywords(_Keywords):
     step_size: float = Field(default=0.3, gt=0)
     max_steps: int = Field(default=300, ge=1)
     method: Literal["gs2", "lqa"] = "gs2"
-    hessian: HessianSource = "auto"
+    initial_hessian: HessianSource = "auto"
     hessian_every: int = Field(default=0, ge=0)
     update: Literal["bofill", "ts_bfgs", "bfgs", "sr1", "psb"] = "bofill"
     gmax: float = Field(default=5e-4, gt=0)

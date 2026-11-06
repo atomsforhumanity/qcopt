@@ -10,6 +10,10 @@ VIRTUAL_ENV=.venv uv pip install -e .. <axtb wheel> sella==2.6.0 ase==3.29.0 geo
 VIRTUAL_ENV=.venv uv pip install "optking @ git+https://github.com/psi-rking/optking.git@0.5.0"
 ```
 
+axtb runs at SCF accuracy 0.01 (`--accuracy`, passed explicitly): at axtb's default (1.0) g-xTB
+gradients carry ~1e-5 Eh/bohr of noise, the size of the 0.001 eV/A convergence threshold. Rounds
+before 2026-11-06 evening ran at the default.
+
 Pin BLAS to one thread before numpy loads (the scripts do), or small eigendecompositions run
 ~100x slower next to axtb's threads. Freeze a copy of these scripts and of the code under test
 for each round: every job imports them when it starts.

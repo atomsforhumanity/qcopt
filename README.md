@@ -9,13 +9,26 @@ qccompute runs.
 import qcopt
 from qcdata import Structure
 
-gxtb = {"program": "axtb", "model": {"method": "gxtb-v2.0.1"}}
+# accuracy 0.01: at axtb's default SCF accuracy, g-xTB gradients carry ~1e-5 Eh/bohr
+# of noise, the size of qcopt's convergence threshold (12% more time per gradient).
+gxtb = {"program": "axtb", "model": {"method": "gxtb-v2.0.1"}, "keywords": {"accuracy": 0.01}}
 guess = Structure.open("ts_guess.xyz")
 
 ts = qcopt.find_ts(guess, gxtb, hessian=True, frequencies=True)  # ProgramOutput
 ts.results.extras["n_imaginary"]                                   # 1
 path = qcopt.irc(ts.results.final_structure, gxtb, hessian=True)   # PathData
 ```
+
+`hessian` names the program computing Hessians: `True` for the gradient program, or another
+one, often a cheaper method. Frames keep the gradient program's energies and gradients:
+
+```python
+gfn2 = {"program": "axtb", "model": {"method": "gfn2"}, "keywords": {"accuracy": 0.01}}
+ts = qcopt.find_ts(guess, gxtb, hessian=gfn2)   # g-xTB saddle from a GFN2 starting Hessian
+```
+
+Keyword arguments are qcopt's keywords (`qcopt.keywords`), such as `maxiter`,
+`initial_hessian` (`"model"`, `"exact"`, ...) or `hessian_every`.
 
 Or as a qcdata input, alone or many at once (they advance together, and each round's
 gradients from all of them are computed in one call):
@@ -29,8 +42,10 @@ inp = ProgramInput(
     structure=guess,
     keywords={"maxiter": 300},
     subprograms=[
-        ProgramSpec(program="axtb", calctype="gradient", model={"method": "gxtb-v2.0.1"}),
-        ProgramSpec(program="axtb", calctype="hessian", model={"method": "gxtb-v2.0.1"}),
+        ProgramSpec(program="axtb", calctype="gradient", model={"method": "gxtb-v2.0.1"},
+                    keywords={"accuracy": 0.01}),
+        ProgramSpec(program="axtb", calctype="hessian", model={"method": "gxtb-v2.0.1"},
+                    keywords={"accuracy": 0.01}),
     ],
 )
 out = qcopt.run(inp)            # or qcopt.run([inp1, inp2, ...])
@@ -41,7 +56,7 @@ out = qcopt.run(inp)            # or qcopt.run([inp1, inp2, ...])
 | Calculation | Method |
 |---|---|
 | `optimization` | RS-RFO in TRIC coordinates (Wang and Song, 2016: each molecule's internal coordinates plus its translation and rotation), or delocalized internals, or Cartesians; Lindh model Hessian or the program's exact one; BFGS updates (Bofill while the Hessian is indefinite); optional frequency check that steps off saddle points |
-| `transition_state` | RS-P-RFO climbing the lowest mode (or one following a guide direction); exact or finite-difference starting Hessian; TS-BFGS updates; recomputed when the negative mode is lost |
+| `transition_state` | RS-P-RFO climbing the lowest mode (or one following a guide direction); exact (or a cheaper method's) or finite-difference starting Hessian; TS-BFGS updates; recomputed when the negative mode is lost |
 | `irc` | Mass-weighted steepest descent by Gonzalez-Schlegel steps (or the local quadratic approximation), both branches together, frames in the input's frame; overshoots retried at half the step; optionally both ends minimized together (`minimize_ends`) |
 
 Distances, angles and dihedrals can be held at target values (`constraints`), atoms

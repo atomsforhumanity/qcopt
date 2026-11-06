@@ -27,6 +27,7 @@ def main() -> None:
     p.add_argument("--timeout", type=int, default=900)
     p.add_argument("--task", default="ts")
     p.add_argument("--method", default="gxtb-v2.0.1")
+    p.add_argument("--accuracy", default="0.01", help="axtb SCF accuracy")
     p.add_argument("--extra", action="append", default=[], help="OPT=JSON")
     p.add_argument(
         "--tag", action="append", default=[], help="OPT=TAG: output name suffix"
@@ -66,6 +67,8 @@ def main() -> None:
             a.task,
             "--method",
             a.method,
+            "--accuracy",
+            a.accuracy,
             "--extra",
             extra,
         ]
