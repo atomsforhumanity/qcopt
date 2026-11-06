@@ -78,6 +78,8 @@ class OptimizationKeywords(_Keywords):
         recompute_hessian_on_loss: Transition states: recompute the exact Hessian when
             the updated one has lost its negative eigenvalue.
         min_steps_between_hessians: Steps between such recomputations, at least.
+        lost_curvature: The negative mode counts as lost once its curvature is above
+            minus this (Hartree/bohr^2, or per internal unit).
         update: The quasi-Newton update between exact Hessians; ``auto``: BFGS for
             minima, TS-BFGS for transition states.
         trust: Starting trust radius (bohr): the largest atomic displacement of a
@@ -115,6 +117,7 @@ class OptimizationKeywords(_Keywords):
     hessian_every: int = Field(default=0, ge=0)
     recompute_hessian_on_loss: bool = True
     min_steps_between_hessians: int = Field(default=3, ge=1)
+    lost_curvature: float = Field(default=1e-4, ge=0)
     update: Literal["bfgs", "bofill", "ts_bfgs", "sr1", "psb", "auto"] = "auto"
     trust: float = Field(default=0.2, gt=0)
     trust_type: Literal["atomic", "norm"] = "atomic"

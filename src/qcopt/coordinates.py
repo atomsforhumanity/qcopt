@@ -89,7 +89,6 @@ class InternalCoordinates:
         CoordinateError: The structure cannot be described (then use Cartesians).
     """
 
-    n_locked = 0
     residual = 0.0
 
     def __init__(self, symbols: Sequence[str], x: Array, tric: bool = True) -> None:
@@ -98,9 +97,8 @@ class InternalCoordinates:
         self.tric = tric
         self.name = "tric" if tric else "dlc"
         self.ic = DelocalizedInternals(symbols, x, tric=tric)
-
-    def at(self, x: Array) -> None:
-        """Nothing to move; the basis is fixed until rebuilt."""
+        self._rigid = np.zeros((self.ic.n, 0))
+        self.at(x)
 
     def gradient(self, x: Array, gradient: Array) -> Array:
         """Internal gradient; records how much of the Cartesian one it misses."""
@@ -120,9 +118,34 @@ class InternalCoordinates:
         """Internal Hessian from a Cartesian one (with the gradient term if given)."""
         return self.ic.hessian(x, hessian, gradient)
 
+    @property
+    def n_locked(self) -> int:  # type: ignore[override]
+        """Overall translation and rotation, which TRIC spans but must not step along."""
+        return int(self._rigid.shape[1]) if self.tric else 0
+
+    def at(self, x: Array) -> None:
+        """Find the internal directions of overall translation and rotation at ``x``."""
+        if not self.tric:
+            return
+        from .geometry import rigid_basis
+
+        xx = np.asarray(x, dtype=float).reshape(-1, 3)
+        rs = self.ic.b_matrix(xx) @ rigid_basis(
+            xx
+        )  # rigid motions in internal coordinates
+        q, r = np.linalg.qr(rs)
+        keep = np.abs(np.diag(r)) > 1e-8
+        self._rigid = np.ascontiguousarray(q[:, keep])
+
     def eigh(self, h: Array) -> tuple[Array, Array]:
-        """Plain eigen-decomposition."""
-        vals, vecs = np.linalg.eigh(0.5 * (h + h.T))
+        """Eigen-decomposition; with TRIC, overall motion shifted up and locked."""
+        h = 0.5 * (h + h.T)
+        if self.tric and self._rigid.shape[1]:
+            from .space import LOCKED_CURVATURE
+
+            p = np.eye(len(h)) - self._rigid @ self._rigid.T
+            h = p @ h @ p + LOCKED_CURVATURE * (self._rigid @ self._rigid.T)
+        vals, vecs = np.linalg.eigh(h)
         return vals, vecs
 
     def jacobian_to_space(self, x: Array, jx: Array) -> Array:
@@ -161,6 +184,7 @@ class InternalCoordinates:
         """Rebuild at ``x``; returns the Hessian carried into the new coordinates."""
         hx = self.ic.to_cartesian_hessian(x, h)
         self.ic = DelocalizedInternals(self.symbols, x, tric=self.tric)
+        self.at(x)
         return self.ic.hessian(x, hx)
 
 

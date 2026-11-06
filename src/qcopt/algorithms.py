@@ -243,7 +243,7 @@ def optimize(
             and exact_available
             and kw.recompute_hessian_on_loss
             and steps_since_hessian >= kw.min_steps_between_hessians
-            and vals[0] >= 0.0
+            and vals[0] > -kw.lost_curvature
         ):
             (ha,) = count((yield [Ask("hessian", x)]))
             if ha.success:
@@ -469,6 +469,7 @@ class _Branch:
     reason: str | None = None
     since_hessian: int = 0
     steps: int = 0
+    ds: float = 0.0
 
 
 def irc(
@@ -523,9 +524,25 @@ def irc(
             prev=ts,
             h=h0.copy(),
             next=x0 + space.to_cartesian(sign * kw.step_size * v).reshape(n, 3),
+            ds=kw.step_size,
         )
         for sign in signs
     ]
+
+    def next_point(b: _Branch) -> Array:
+        """The LQA step of length ``b.ds`` from the branch's last point."""
+        space.at(b.x)
+        g_mw = space.project(
+            space.gradient_to_space(np.asarray(b.prev.gradient).ravel())
+        )
+        hv, hvec = space.eigh(space.hessian_to_space(b.h))
+        n_free = len(hv) - space.n_locked
+        gt = hvec.T @ g_mw
+        gt[n_free:] = 0.0
+        hv = np.where(hv >= LOCKED_CURVATURE * 0.5, 0.0, hv)
+        step_mw = hvec @ _lqa_step(hv, gt, b.ds)
+        return b.x + space.to_cartesian(space.project(step_mw)).reshape(n, 3)
+
     while True:
         active = [b for b in branches if not b.done]
         if not active:
@@ -544,10 +561,22 @@ def irc(
             if not ans.success:
                 b.done, b.reason = True, f"gradient failed: {ans.error}"
                 continue
-            if ans.energy > b.prev.energy + 1e-10 and b.frames:
-                b.done, b.reason = True, "energy rose"
-                continue
             dx = (np.asarray(ans.positions) - b.x).ravel()
+            if ans.energy > b.prev.energy + 1e-10 and b.frames:
+                # Overshot the valley floor: learn the curvature from the point
+                # and retry from the last one with half the step, until it is tiny.
+                if ans.hessian is None:
+                    y = (
+                        np.asarray(ans.gradient).ravel()
+                        - np.asarray(b.prev.gradient).ravel()
+                    )
+                    b.h = update(b.h, dx, y)
+                b.ds *= 0.5
+                if b.ds < kw.step_size / 16:
+                    b.done, b.reason = True, "energy rose"
+                else:
+                    b.next = next_point(b)
+                continue
             if ans.hessian is not None:
                 b.h = np.asarray(ans.hessian, dtype=float)
                 b.since_hessian = 0
@@ -561,10 +590,7 @@ def irc(
             b.frames.append(ans)
             b.x, b.prev = np.asarray(ans.positions, dtype=float).reshape(n, 3), ans
             space.at(b.x)
-            g_mw = space.project(
-                space.gradient_to_space(np.asarray(ans.gradient).ravel())
-            )
-            hv, hvec = space.eigh(space.hessian_to_space(b.h))
+            hv, _ = space.eigh(space.hessian_to_space(b.h))
             n_free = len(hv) - space.n_locked
             g_cart = np.asarray(ans.gradient, dtype=float).ravel() * space.free
             if max_atomic_norm(g_cart) < kw.gmax and np.min(hv[:n_free]) > -1e-5:
@@ -573,11 +599,8 @@ def irc(
             if b.steps >= kw.max_steps:
                 b.done, b.reason = True, "max_steps"
                 continue
-            gt = hvec.T @ g_mw
-            gt[n_free:] = 0.0
-            hv = np.where(hv >= LOCKED_CURVATURE * 0.5, 0.0, hv)
-            step_mw = hvec @ _lqa_step(hv, gt, kw.step_size)
-            b.next = b.x + space.to_cartesian(space.project(step_mw)).reshape(n, 3)
+            b.ds = min(kw.step_size, 2.0 * b.ds)
+            b.next = next_point(b)
 
     by_name = {b.name: b for b in branches}
     rev_frames = (
