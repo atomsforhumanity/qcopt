@@ -42,7 +42,7 @@ out = qcopt.run(inp)            # or qcopt.run([inp1, inp2, ...])
 |---|---|
 | `optimization` | RS-RFO in TRIC coordinates (Wang and Song, 2016: each molecule's internal coordinates plus its translation and rotation), or delocalized internals, or Cartesians; Lindh model Hessian or the program's exact one; BFGS updates (Bofill while the Hessian is indefinite); optional frequency check that steps off saddle points |
 | `transition_state` | RS-P-RFO climbing the lowest mode (or one following a guide direction); exact or finite-difference starting Hessian; TS-BFGS updates; recomputed when the negative mode is lost |
-| `irc` | Mass-weighted steepest descent by the local quadratic approximation, both branches together, frames in the input's frame; overshoots retried at half the step |
+| `irc` | Mass-weighted steepest descent by the local quadratic approximation, both branches together, frames in the input's frame; overshoots retried at half the step; optionally both ends minimized together (`minimize_ends`) |
 
 Distances, angles and dihedrals can be held at target values (`constraints`), atoms
 frozen (`frozen_atoms`). Every frame is a qcdata `Frame` with the energy and gradient

@@ -619,7 +619,12 @@ def irc(
                 b.done, b.reason = True, f"gradient failed: {ans.error}"
                 continue
             dx = (np.asarray(ans.positions) - b.x).ravel()
-            if ans.energy > b.prev.energy + 1e-10 and b.frames:
+            # Past the valley floor: the energy rose, or the new gradient points
+            # along the step (a step can jump a shallow basin and still land lower).
+            overshot = ans.energy > b.prev.energy + 1e-10 or (
+                float(np.asarray(ans.gradient, dtype=float).ravel() @ dx) > 0.0
+            )
+            if overshot and b.frames:
                 # Overshot the valley floor: learn the curvature from the point
                 # and retry from the last one with half the step, until it is tiny.
                 if ans.hessian is None:

@@ -143,7 +143,11 @@ class IRCKeywords(_Keywords):
     Attributes:
         direction: Which branches to follow from the transition state.
         step_size: Arc length of each step in mass-weighted coordinates
-            (bohr amu^1/2). A step whose energy rises is retried at half the length.
+            (bohr amu^1/2). A step that overshoots the valley floor (the energy
+            rises, or the new gradient points along the step) is retried at half the
+            length. Longer steps are cheaper: at g-xTB, 0.3 cost 35% fewer gradients
+            than 0.1 on 100 Reaction-QM IRCs but ended one in another minimum, which
+            0.1 did not; a corrector is needed before longer steps are safe.
         max_steps: Most steps per branch.
         method: ``lqa``: local quadratic approximation (Page and McIver, 1988) on
             the current Hessian.
@@ -165,7 +169,7 @@ class IRCKeywords(_Keywords):
     """
 
     direction: Literal["both", "forward", "reverse"] = "both"
-    step_size: float = Field(default=0.3, gt=0)
+    step_size: float = Field(default=0.1, gt=0)
     max_steps: int = Field(default=300, ge=1)
     method: Literal["lqa"] = "lqa"
     hessian: HessianSource = "auto"
