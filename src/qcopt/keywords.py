@@ -42,6 +42,11 @@ class OptimizationKeywords(_Keywords):
     Attributes:
         maxiter: Most steps (gradients at new geometries) before giving up.
         convergence: The convergence criteria.
+        coordinates: ``tric``: delocalized internal coordinates with each fragment's
+            translation and rotation (Wang and Song, 2016); ``dlc``: delocalized
+            internals with fragments joined by extra bonds; ``cartesian``:
+            Cartesians without rigid motion. Internals fall back to Cartesians when
+            atoms are frozen or the structure cannot be described.
         hessian: The starting Hessian. ``auto``: the Hessian subprogram's when one is
             given, else Lindh's model for minima and finite differences of gradients
             for transition states. ``exact`` needs a Hessian subprogram, or uses
@@ -68,12 +73,17 @@ class OptimizationKeywords(_Keywords):
             energy rose, before the run continues anyway.
         frequencies: Compute the Hessian at the final structure and report its
             harmonic frequencies and number of imaginary modes.
+        escape_saddles: Minimizations: check the converged structure's frequencies
+            and, if it is a saddle point, step off it along the lowest mode and
+            minimize again, up to this many times (0: no check).
+        escape_step: Largest atomic displacement (bohr) of such a step.
         imaginary_cutoff: Frequencies below minus this (cm^-1) count as imaginary.
         fd_step: Step (bohr) of finite-difference Hessians.
     """
 
     maxiter: int = Field(default=500, ge=1)
     convergence: Convergence = Convergence()
+    coordinates: Literal["tric", "dlc", "cartesian"] = "cartesian"
     hessian: HessianSource = "auto"
     hessian_every: int = Field(default=0, ge=0)
     recompute_hessian_on_loss: bool = True
@@ -88,6 +98,8 @@ class OptimizationKeywords(_Keywords):
     follow: Literal["overlap", "lowest"] = "overlap"
     max_rejections: int = Field(default=3, ge=0)
     frequencies: bool = False
+    escape_saddles: int = Field(default=0, ge=0)
+    escape_step: float = Field(default=0.189, gt=0)
     imaginary_cutoff: float = 10.0
     fd_step: float = Field(default=0.005, gt=0)
 

@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 
 from . import hessians
+from .coordinates import CartesianCoordinates, InternalCoordinates, make_coordinates
 from .driver import Algorithm, Answer, Ask
 from .geometry import Array, masses, max_atomic_norm, rms
 from .keywords import IRCKeywords, OptimizationKeywords
@@ -109,18 +110,20 @@ def optimize(
     count = _Counter()
     n = len(symbols)
     x = np.asarray(positions, dtype=float).reshape(n, 3)
-    space = CartesianSpace(n, frozen=kw.frozen_atoms)
-
-    def _size(dx: Array) -> float:
-        return (
-            max_atomic_norm(dx)
-            if kw.trust_type == "atomic"
-            else float(np.linalg.norm(dx))
-        )
-
+    cart = CartesianSpace(n, frozen=kw.frozen_atoms)
+    coords = make_coordinates(
+        kw.coordinates, symbols, x, kw.frozen_atoms, kw.trust_type == "atomic"
+    )
     frames: list[Answer] = []
     log: list[dict[str, Any]] = []
-    info: dict[str, Any] = {"rejected_steps": 0, "hessian_recomputes": 0, "log": log}
+    info: dict[str, Any] = {
+        "rejected_steps": 0,
+        "hessian_recomputes": 0,
+        "coordinate_rebuilds": 0,
+        "backtransform_failures": 0,
+        "coordinates": coords.name,
+        "log": log,
+    }
     source = _hessian_source(kw, has_hessian_program, transition_state)
     exact_available = source in ("exact", "finite_difference")
     (a,) = count((yield [Ask("hessian" if exact_available else "gradient", x)]))
@@ -129,12 +132,14 @@ def optimize(
             frames=[a], converged=False, error=f"first calculation failed: {a.error}"
         )
     frames.append(a)
+    coords.at(x)
+    g_raw = np.asarray(a.gradient, dtype=float).ravel()
     if exact_available:
-        h = np.asarray(a.hessian, dtype=float)
+        h = coords.hessian(x, np.asarray(a.hessian, dtype=float), g_raw)
     elif source == "model":
-        h = hessians.lindh(numbers, x) + 1e-4 * np.eye(3 * n)
+        h = coords.hessian(x, hessians.lindh(numbers, x) + 1e-4 * np.eye(3 * n))
     else:
-        h = 0.5 * np.eye(3 * n)
+        h = coords.hessian(x, 0.5 * np.eye(3 * n))
     update_name = (
         kw.update
         if kw.update != "auto"
@@ -150,16 +155,61 @@ def optimize(
     last_step: Array | None = None
     last_de: float | None = None
     steps_since_hessian = 0
-    vals: Array | None = None
-    for _ in range(kw.maxiter):
-        g = np.asarray(a.gradient, dtype=float).ravel()
-        space.at(x)
-        gp = space.project(g)
-        if _converged(kw, gp, last_step, last_de):
-            converged = True
-            break
-        vals, vecs = space.eigh(h)
-        n_free = len(vals) - space.n_locked
+    g = coords.gradient(x, g_raw)
+    freqs = None
+    escapes = 0
+    iterations = 0
+    while iterations < kw.maxiter:
+        iterations += 1
+        cart.at(x)
+        if _converged(
+            kw, cart.project(np.asarray(a.gradient).ravel()), last_step, last_de
+        ):
+            if transition_state or kw.escape_saddles == 0:
+                converged = True
+                break
+            # A minimization can stop on a saddle point, where the forces vanish too.
+            (ha,) = count((yield [Ask("hessian", x)]))
+            if not ha.success:
+                converged = True
+                break
+            frames[-1] = _with_hessian(frames[-1], np.asarray(ha.hessian))
+            freqs = frequencies(
+                np.asarray(ha.hessian), symbols, x, frozen=kw.frozen_atoms
+            )
+            if (
+                freqs.n_imaginary(kw.imaginary_cutoff) == 0
+                or escapes >= kw.escape_saddles
+            ):
+                converged = True
+                break
+            escapes += 1
+            info["saddle_escapes"] = escapes
+            mode_disp = np.asarray(freqs.modes[0], dtype=float)
+            x = x + mode_disp / max_atomic_norm(mode_disp) * kw.escape_step
+            (a,) = count((yield [Ask("gradient", x)]))
+            if not a.success:
+                return RunResult(
+                    frames=frames + [a],
+                    converged=False,
+                    error=f"gradient failed: {a.error}",
+                    info=info,
+                )
+            frames.append(a)
+            coords.at(x)
+            h = coords.hessian(x, np.asarray(ha.hessian))
+            g = coords.gradient(x, np.asarray(a.gradient, dtype=float))
+            trust, last_step, last_de, freqs = kw.trust, None, None, None
+            continue
+        if coords.needs_rebuild(x) or coords.residual > max(
+            0.2 * kw.convergence.gmax,
+            1e-3 * max_atomic_norm(np.asarray(a.gradient)),
+        ):
+            h = coords.rebuild(x, h)  # type: ignore[union-attr]
+            g = coords.gradient(x, np.asarray(a.gradient, dtype=float))
+            info["coordinate_rebuilds"] += 1
+        vals, vecs = coords.eigh(h)
+        n_free = len(vals) - coords.n_locked
         if (
             transition_state
             and exact_available
@@ -169,26 +219,46 @@ def optimize(
         ):
             (ha,) = count((yield [Ask("hessian", x)]))
             if ha.success:
-                h = np.asarray(ha.hessian, dtype=float)
-                frames[-1] = _with_hessian(frames[-1], h)
+                h = coords.hessian(
+                    x, np.asarray(ha.hessian), np.asarray(ha.gradient).ravel()
+                )
+                frames[-1] = _with_hessian(frames[-1], np.asarray(ha.hessian))
                 info["hessian_recomputes"] += 1
                 steps_since_hessian = 0
-                vals, vecs = space.eigh(h)
+                vals, vecs = coords.eigh(h)
         mode = None
         if transition_state:
-            if mode_ref is None:
+            if mode_ref is None or not isinstance(coords, CartesianCoordinates):
                 mode = 0
             else:
-                mode = select_mode(vecs, vals, space.project(mode_ref), n_free)
-                if kw.follow == "overlap":
-                    mode_ref = vecs[:, mode]
-                else:
-                    mode_ref = None
+                mode = select_mode(vecs, vals, cart.project(mode_ref), n_free)
+                mode_ref = vecs[:, mode] if kw.follow == "overlap" else None
         step = rfo_step(
-            vals, vecs, gp, trust, mode=mode, atomic=kw.trust_type == "atomic"
+            vals,
+            vecs,
+            g,
+            trust,
+            mode=mode,
+            atomic=coords.name == "cartesian" and kw.trust_type == "atomic",
         )
-        dx = space.project(step.dx)
-        x_new = x + dx.reshape(n, 3)
+        x_new, d, ok = coords.step(x, step.dx)
+        if not ok:
+            info["backtransform_failures"] += 1
+            if isinstance(coords, InternalCoordinates):
+                h = coords.rebuild(x, h)
+                g = coords.gradient(x, np.asarray(a.gradient, dtype=float))
+                info["coordinate_rebuilds"] += 1
+            trust = max(kw.trust_min, 0.5 * trust)
+            if info["backtransform_failures"] > 20:
+                coords = CartesianCoordinates(
+                    n, kw.frozen_atoms, kw.trust_type == "atomic"
+                )
+                coords.at(x)
+                h = hessians.lindh(numbers, x) + 1e-4 * np.eye(3 * n)
+                g = coords.gradient(x, np.asarray(a.gradient, dtype=float))
+                info["coordinates"] = "cartesian (fallback)"
+            continue
+        predicted = float(g @ d + 0.5 * d @ h @ d)
         (b,) = count((yield [Ask("gradient", x_new)]))
         if not b.success:
             failures += 1
@@ -199,52 +269,57 @@ def optimize(
                     error=f"gradient failed: {b.error}",
                     info=info,
                 )
-            trust = max(kw.trust_min, 0.25 * min(trust, _size(dx)))
+            trust = max(kw.trust_min, 0.25 * min(trust, coords.size(d)))
             continue
         failures = 0
         de = b.energy - a.energy
-        ratio = de / step.predicted if abs(step.predicted) > 1e-14 else 1.0
-        norm = _size(dx)
+        noise = abs(de) < 1e-8 and abs(predicted) < 1e-8  # below SCF noise
+        ratio = 1.0 if noise or abs(predicted) < 1e-14 else de / predicted
+        size = coords.size(d)
         log.append(
             {
-                "step": norm,
+                "step": size,
                 "trust": trust,
                 "ratio": float(ratio),
                 "lowest": float(vals[0]),
                 "mode": None if mode is None else int(mode),
                 "de": float(de),
-                "gmax": max_atomic_norm(gp),
+                "gmax": max_atomic_norm(cart.project(np.asarray(a.gradient).ravel())),
             }
         )
         trust = update_trust(
             trust,
             ratio,
-            norm,
+            size,
             minimum=kw.trust_min,
             maximum=kw.trust_max,
             ts=transition_state,
         )
-        y = space.project(np.asarray(b.gradient, dtype=float).ravel()) - gp
+        coords.at(x_new)
+        g_new = coords.gradient(x_new, np.asarray(b.gradient, dtype=float))
+        y = g_new - g
         if update_name == "bfgs" and kw.update == "auto" and vals[0] < -1e-10:
-            h = hessians.bofill(h, dx, y)  # BFGS cannot fix negative curvature
+            h = hessians.bofill(h, d, y)  # BFGS cannot fix negative curvature
         else:
-            h = update(h, dx, y)
+            h = update(h, d, y)
         reject = (
             not transition_state
-            and de > 1e-10
+            and de > 1e-8
             and ratio < 0.0
             and rejections < kw.max_rejections
-            and norm > kw.trust_min
+            and size > kw.trust_min
         )
         if reject:
             rejections += 1
             info["rejected_steps"] += 1
-            trust = max(kw.trust_min, min(trust, 0.5 * norm))
+            trust = max(kw.trust_min, min(trust, 0.5 * size))
+            coords.at(x)
             continue
         rejections = 0
-        x, a = x_new, b
+        last_step = (x_new - x).ravel()
+        x, a, g = x_new, b, g_new
         frames.append(b)
-        last_step, last_de = dx, de
+        last_de = de
         steps_since_hessian += 1
         if (
             exact_available
@@ -253,18 +328,21 @@ def optimize(
         ):
             (ha,) = count((yield [Ask("hessian", x)]))
             if ha.success:
-                h = np.asarray(ha.hessian, dtype=float)
-                frames[-1] = _with_hessian(frames[-1], h)
+                h = coords.hessian(
+                    x, np.asarray(ha.hessian), np.asarray(ha.gradient).ravel()
+                )
+                frames[-1] = _with_hessian(frames[-1], np.asarray(ha.hessian))
                 info["hessian_recomputes"] += 1
                 steps_since_hessian = 0
-    else:
-        space.at(x)
+    if not converged:
+        cart.at(x)
         converged = _converged(
-            kw, space.project(np.asarray(a.gradient).ravel()), last_step, last_de
+            kw, cart.project(np.asarray(a.gradient).ravel()), last_step, last_de
         )
 
-    freqs = None
-    if kw.frequencies:
+    if freqs is not None:
+        info["n_imaginary"] = freqs.n_imaginary(kw.imaginary_cutoff)
+    elif kw.frequencies:
         (ha,) = count((yield [Ask("hessian", x)]))
         if ha.success:
             frames[-1] = _with_hessian(frames[-1], np.asarray(ha.hessian))
@@ -272,12 +350,13 @@ def optimize(
                 np.asarray(ha.hessian), symbols, x, frozen=kw.frozen_atoms
             )
             info["n_imaginary"] = freqs.n_imaginary(kw.imaginary_cutoff)
+    cart.at(x)
     info.update(
         n_gradients=count.gradients,
         n_hessians=count.hessians,
         n_steps=len(frames) - 1,
         final_trust=trust,
-        gmax=max_atomic_norm(space.project(np.asarray(a.gradient).ravel())),
+        gmax=max_atomic_norm(cart.project(np.asarray(a.gradient).ravel())),
         hessian=source,
         update=update_name,
     )
