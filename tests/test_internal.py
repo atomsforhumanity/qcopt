@@ -210,3 +210,35 @@ def test_saddle_escape():
     assert out.results.extras["n_imaginary"] == 0
     assert out.results.extras["saddle_escapes"] == 1
     assert out.results.final_energy < flat.results.final_energy
+
+
+def test_bent_triatomic_fragment_keeps_every_motion():
+    # H-C-N at 171 degrees next to water: bent by the bend test, so not "linear"
+    t = np.radians(9.0)
+    x = np.array(
+        [
+            [0, 0, 0],
+            [2.2, 0, 0],
+            [-2.0 * np.cos(t), 2.0 * np.sin(t), 0],
+            [0.5, 6.0, 0],
+            [1.3, 6.6, 0],
+            [-0.2, 6.9, 0],
+        ]
+    )
+    ic = DelocalizedInternals(["C", "N", "H", "O", "H", "H"], x, tric=True)
+    assert ic.n == 18
+
+
+@pytest.mark.axtb
+def test_tric_ts_search_does_not_climb_overall_rotation():
+    """Reaction-QM RXN_0000006257: the TS search once climbed TRIC's zero-curvature
+    rotation after losing the reaction mode and never converged."""
+    from pathlib import Path
+
+    s = Structure.open(Path(__file__).parent / "data" / "rqm_rxn_0000006257_ts.xyz")
+    gxtb = {"program": "axtb", "model": {"method": "gxtb-v2.0.1"}}
+    out = qcopt.find_ts(
+        s, gxtb, hessian=True, coordinates="tric", maxiter=150, frequencies=True
+    )
+    assert out.success, out.traceback
+    assert out.results.extras["n_imaginary"] == 1

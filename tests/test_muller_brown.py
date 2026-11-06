@@ -164,3 +164,22 @@ def test_output_round_trips_through_json():
     again = type(out).model_validate_json(out.model_dump_json())
     assert again.results.frames[-1].results.freqs_wavenumber
     assert again.results.extras["n_imaginary"] == 1
+
+
+@pytest.mark.parametrize("step", [0.15, 0.3])
+def test_irc_with_long_steps_still_reaches_the_minima(step):
+    out = qcopt.irc(
+        _structure(*MB_SADDLES[0]),
+        SPEC,
+        hessian=True,
+        evaluator=_evaluator(),
+        step_size=step,
+        gmax=1e-4,
+    )
+    assert out.success, out.traceback
+    path = out.results
+    found = sorted(
+        int(np.argmin([np.linalg.norm(_xy(f.structure) - m) for m in MB_MINIMA]))
+        for f in (path.frames[0], path.frames[-1])
+    )
+    assert found == [0, 2]
