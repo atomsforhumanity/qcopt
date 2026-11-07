@@ -6,11 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.2.1] - 2026-11-07
+
+Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.0.
+
 ### Changed
 
 - The IRC `step_size` documentation quotes the 0.2.0 benchmark (same ends as Sella in 94
   of 100 Reaction-QM IRCs, median 349.5 gradients) instead of 0.1.0's.
-- Benchmarks (`benchmarks/`, not part of the package): a run that reaches its time limit
+- The IRC `gmax` documentation says that from a very soft transition state a branch can
+  meet the end test after its first step, far above the minimum (minimize the ends).
+- Benchmarks (`benchmarks/`, not installed with the package): a run that reaches its time limit
   stops in its own process and keeps its counts; a failed final check is recorded as
   `check_error`; an energy-only request from OptKing gets an energy alone (`n_energy`);
   `batch_demo.py` takes the structures' folder as `--data` and records the time spent in
@@ -129,6 +135,7 @@ All notable changes to this project are documented here. The format follows
   `find_ts` and `irc` names the Hessian program only, and other values are errors
   (a string was ignored).
 
-[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.2.0...HEAD
+[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.2.1...HEAD
+[0.2.1]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.1
 [0.2.0]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.0
 [0.1.0]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.1.0
