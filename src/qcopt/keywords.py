@@ -118,11 +118,15 @@ class OptimizationKeywords(_Keywords):
             energy rose, before the run continues anyway.
         frequencies: Compute the Hessian at the final structure and report its
             harmonic frequencies and number of imaginary modes (from the Hessian
-            subprogram, or finite differences of gradients without one).
+            subprogram, or finite differences of gradients without one). With the
+            gradient method's own Hessians they decide: a minimization with an
+            imaginary mode fails, and so does a transition-state search without
+            exactly one. A cheaper method's are reported only.
         escape_saddles: Minimizations: check the converged structure's frequencies
             and, if it is a saddle point, step off it along the lowest mode and
             minimize again, up to this many times (0: no check). A structure still
-            a saddle point after that fails. Not with constraints.
+            a saddle point after that fails (with the gradient method's own
+            Hessians). Not with constraints.
         escape_step: Largest atomic displacement (bohr) of such a step.
         imaginary_cutoff: Frequencies below minus this (cm^-1) count as imaginary.
         fd_step: Step (bohr) of finite-difference Hessians.

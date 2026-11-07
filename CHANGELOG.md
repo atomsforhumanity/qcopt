@@ -22,8 +22,8 @@ All notable changes to this project are documented here. The format follows
   overshoot and overwrites the previous frame, and its result no longer ends the branch
   as flat regardless of the curvature; a failed optional Hessian (end check,
   `hessian_every`) no longer ends the branch; a point already below `gmax` is no longer
-  rejected because its gradient points along the step; the first step is checked for
-  going downhill too; Gonzalez-Schlegel steps no longer move sideways along a mode that
+  rejected because its gradient points along the step; a first step that crosses a
+  valley is shortened too; Gonzalez-Schlegel steps no longer move sideways along a mode that
   carries no gradient; `minimize_ends` no longer repeats an end frame; a branch whose
   steps shrink to nothing ends ("stalled") instead of crawling to `max_steps`.
 - An exception inside an optimization or IRC, a crashing evaluator, and missing, NaN or
@@ -35,9 +35,10 @@ All notable changes to this project are documented here. The format follows
 - A Hessian subprogram with the gradient one's program and method but other keywords that
   define the surface (a solvent, an SCF accuracy; not threads or how the Hessian is
   computed) is a separate calculation: its energies and gradients no longer reach the
-  frames. Frequencies from a separate (lower-level) Hessian program are reported in
-  `extras["frequencies"]`, labelled with it, not on the target method's frame, and no
-  longer decide whether a transition-state search succeeded.
+  frames. Frequencies from a separate Hessian calculation are reported in
+  `extras["frequencies"]`, labelled with it, not on the target method's frame; those of
+  a cheaper method (another program or method) no longer decide whether a search
+  succeeded.
 - `ComputeEvaluator`: one unreadable output no longer crashes the batch, and Hessian
   outputs without a gradient (xtb's codec) are paired with the gradient program's, also
   through `RoutingEvaluator`.
@@ -56,17 +57,19 @@ All notable changes to this project are documented here. The format follows
 - Gradient and Hessian counts are the calculations the evaluator ran, failed ones included
   and none when the evaluator itself failed, on every exit; IRC counts include the end
   minimizations.
-- The starting trust radius is kept between `trust_min` and `trust_max`.
+- The starting trust radius, also after a saddle escape, is kept between `trust_min`
+  and `trust_max`.
 - Internal coordinates leave out bends and torsions that are singular when built (an
   angle within 5 degrees of 0 or 180), are rebuilt when a bend or a torsion's angle
   collapses toward 0, and a back-transformation that converges to the wrong point (a
   rotation coordinate flipped by pi on a bent, nearly linear fragment) counts as failed.
 - RS-P-RFO keeps its step along the climbed mode when the gradient there is tiny (a
   cancellation in the shift); RS-RFO's shift goes down to 1e-100.
-- The SR1 part of Bofill's update and TS-BFGS use scale-free skip tests, so tiny steps
-  still meet the secant condition.
+- The SR1 part of Bofill's update and TS-BFGS use scale-free skip tests, so steps down to
+  about 1e-7 bohr still meet the secant condition.
 - IRC steps by the local quadratic approximation (`method="lqa"`) have the requested arc
-  length when curvatures differ widely, and stop at the end of the path.
+  length when curvatures differ widely, and stop at the end of the path without
+  searching further.
 
 ### Changed
 

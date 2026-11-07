@@ -328,7 +328,7 @@ def test_irc_with_unconverged_end_minimizations_fails():
         end_convergence={"gmax": 1e-12},
     )
     assert not out.success
-    assert "end minimization did not converge" in out.traceback
+    assert "end minimization failed: not converged" in out.traceback
 
 
 class _NoisyHessians(qcopt.FunctionEvaluator):
@@ -926,3 +926,76 @@ def test_ts_search_checks_a_strong_second_negative_mode():
     )
     assert not out.success
     assert "2 directions of negative curvature" in out.traceback
+
+
+# --------------------------------------------- round 4 (review of the round-2 fixes)
+
+
+def _soft_top():
+    """A barrier whose top is soft (curvature -1e-4) and steep beyond |x| ~ 0.5."""
+    a, c, e, k = 1e-4, 0.1, 0.025, 0.05
+
+    def fn(p):
+        x, y, z = (float(v) for v in p[0])
+        en = -0.5 * a * x**2 - c / 8 * x**8 + e / 10 * x**10 + 0.5 * k * (y * y + z * z)
+        return en, np.array([[-a * x - c * x**7 + e * x**9, k * y, k * z]])
+
+    def hess(p):
+        x = float(p[0, 0])
+        return np.diag([-a - 7 * c * x**6 + 9 * e * x**8, k, k])
+
+    return fn, hess
+
+
+def test_irc_from_a_transition_state_slightly_off_the_saddle():
+    fn, hess = _soft_top()
+    ev = qcopt.FunctionEvaluator(fn, hess)
+    ts = qcopt.find_ts(_atom(0.18), {"program": "f"}, hessian=True, evaluator=ev)
+    assert ts.success  # converged as it is: the gradient is below gmax
+    out = qcopt.irc(_atom(0.18), {"program": "f"}, hessian=True, evaluator=ev)
+    assert out.success, out.traceback
+    x = _irc_frames_x(out)
+    assert x[0] == pytest.approx(-2.0, abs=0.05) and x[-1] == pytest.approx(
+        2.0, abs=0.05
+    )
+
+
+def test_trust_after_a_saddle_escape_stays_within_trust_max():
+    out = qcopt.minimize(
+        _mb(MB_SADDLES[1]),
+        MB,
+        hessian=True,
+        evaluator=_ev(),
+        escape_saddles=1,
+        coordinates="cartesian",
+        trust=5.0,
+        trust_max=0.05,
+    )
+    assert out.results.extras.get("saddle_escapes") == 1
+    assert max(s["trust"] for s in out.results.extras["log"]) <= 0.05
+
+
+def test_same_method_hessians_with_other_settings_still_decide():
+    other = {"program": "muller-brown", "keywords": {"memory": 1}}  # not the surface
+    out = qcopt.minimize(
+        _mb(MB_SADDLES[1]), MB, hessian=other, evaluator=_ev(), frequencies=True
+    )
+    assert not out.success
+    assert "saddle point" in out.traceback
+
+
+def test_lqa_finds_the_end_of_a_short_path_quickly(monkeypatch):
+    from qcopt.algorithms import _lqa_step
+
+    calls = {"n": 0}
+    real = np.geomspace
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(algorithms.np, "geomspace", counting)
+    vals = np.linspace(0.01, 1.0, 30)
+    step = _lqa_step(vals, 1e-3 * np.ones(30), 1.0)  # the path is shorter than 1.0
+    assert np.allclose(step, -1e-3 / vals, rtol=1e-6)  # its end: the Newton step
+    assert calls["n"] < 30

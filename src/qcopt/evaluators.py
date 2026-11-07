@@ -132,7 +132,9 @@ _AXTB_HESSIAN = frozenset({"hessian_method", "hessian_step", "hessian_accuracy"}
 
 # Keywords that change how a calculation runs or how its Hessian is computed, but not
 # its energy surface, by program; ``threads`` for every program.
-_NOT_SURFACE: dict[str, frozenset[str]] = {"axtb": _AXTB_HESSIAN | {"threads"}}
+_NOT_SURFACE: dict[str, frozenset[str]] = {
+    "axtb": _AXTB_HESSIAN | {"threads", "max_iter", "mixer"}
+}
 
 
 def surface_keywords(spec: Any) -> dict[str, Any]:

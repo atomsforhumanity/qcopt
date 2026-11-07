@@ -72,6 +72,11 @@ def _separate(grad: ProgramSpec, hess: ProgramSpec | None) -> bool:
     )
 
 
+def _same_method(grad: ProgramSpec, hess: ProgramSpec | None) -> bool:
+    """Whether Hessians are the gradient method's own (the same program and method)."""
+    return hess is None or (hess.program == grad.program and hess.model == grad.model)
+
+
 def _prepare(inp: ProgramInput) -> tuple[TaskContext, Any]:
     if inp.program != PROGRAM:
         raise ValueError(f"qcopt runs program='qcopt' inputs, not {inp.program!r}.")
@@ -118,9 +123,17 @@ def _algorithm(inp: ProgramInput, ctx: TaskContext, kw: Any) -> algorithms.Algor
     s = inp.require_structure()
     has_h = ctx.hessian_spec is not None
     sep = ctx.separate_hessian
+    grad = _subprogram(inp, CalcType.gradient)
+    assert grad is not None
+    own = _same_method(grad, ctx.hessian_spec)
     if inp.calctype == CalcType.irc:
         return algorithms.irc(
-            s.geometry, s.symbols, kw, has_hessian_program=has_h, separate_hessian=sep
+            s.geometry,
+            s.symbols,
+            kw,
+            has_hessian_program=has_h,
+            separate_hessian=sep,
+            own_hessian=own,
         )
     numbers = [int(getattr(pt, sym.capitalize()).number) for sym in s.symbols]
     return algorithms.optimize(
@@ -131,6 +144,7 @@ def _algorithm(inp: ProgramInput, ctx: TaskContext, kw: Any) -> algorithms.Algor
         transition_state=inp.calctype == CalcType.transition_state,
         has_hessian_program=has_h,
         separate_hessian=sep,
+        own_hessian=own,
     )
 
 
@@ -208,7 +222,7 @@ def _output(
                     )
                 }
             )
-        else:  # from the separate Hessian program: not the frame's own method
+        else:  # from a separate Hessian calculation: not the frame's own
             hspec = _subprogram(inp, CalcType.hessian)
             assert hspec is not None
             extras["frequencies"] = {
