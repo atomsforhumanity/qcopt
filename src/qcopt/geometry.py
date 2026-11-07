@@ -29,6 +29,32 @@ def masses(symbols: Sequence[str]) -> Array:
     return np.array([float(getattr(pt, s.capitalize()).mass) for s in symbols])
 
 
+# A structure is linear when its smallest principal moment of inertia is below this
+# fraction of its largest (the rule axtb's vibrational analysis uses). A strict
+# numerical test would count a molecule 1e-5 bohr off linear as bent, and its third
+# "rotation" would then be one of the two degenerate bends.
+LINEAR_MOMENT_RATIO = 1e-3
+
+
+def _inertia(x: Array, w: Array) -> Array:
+    r = x - (w[:, None] * x).sum(axis=0) / w.sum()
+    return np.einsum("i,ij,ik->jk", w, r, r) * -1.0 + np.eye(3) * float(
+        (w * (r * r).sum(axis=1)).sum()
+    )
+
+
+def is_linear(
+    positions: Array, weights: Array | None = None, tol: float = LINEAR_MOMENT_RATIO
+) -> bool:
+    """Whether the atoms lie on a line: smallest principal moment below ``tol`` of the largest."""
+    x = np.asarray(positions, dtype=float).reshape(-1, 3)
+    if len(x) < 3:
+        return True
+    w = np.ones(len(x)) if weights is None else np.asarray(weights, dtype=float)
+    moments = np.linalg.eigvalsh(_inertia(x, w))
+    return bool(moments[0] < tol * moments[2])
+
+
 def rigid_basis(positions: Array, weights: Array | None = None) -> Array:
     """Orthonormal columns spanning rigid translations and rotations.
 
@@ -38,23 +64,24 @@ def rigid_basis(positions: Array, weights: Array | None = None) -> Array:
             ``sqrt(m) * x``; None for plain Cartesians.
 
     Returns:
-        ``(3 n_atoms, k)`` with k = 6, or 5 for a linear structure (3 for one atom).
+        ``(3 n_atoms, k)`` with k = 6, or 5 for a linear structure (:func:`is_linear`),
+        or 3 for one atom.
     """
     x = np.asarray(positions, dtype=float).reshape(-1, 3)
     w = np.ones(len(x)) if weights is None else np.asarray(weights, dtype=float)
     sw = np.sqrt(w)
-    center = (w[:, None] * x).sum(axis=0) / w.sum()
-    r = x - center
-    vecs = np.zeros((6, x.size))
+    vecs = []
     for k in range(3):
         t = np.zeros_like(x)
         t[:, k] = sw
-        vecs[k] = t.ravel()
-        e = np.zeros(3)
-        e[k] = 1.0
-        vecs[3 + k] = (sw[:, None] * cross(e, r)).ravel()
-    u, s, _ = np.linalg.svd(vecs.T, full_matrices=False)
-    keep = np.nonzero(s > 1e-6 * np.max(s))[0]
+        vecs.append(t.ravel())
+    if len(x) > 1:
+        r = x - (w[:, None] * x).sum(axis=0) / w.sum()
+        _, axes = np.linalg.eigh(_inertia(x, w))  # ascending: the long axis first
+        for e in axes.T[1:] if is_linear(x, w) else axes.T:
+            vecs.append((sw[:, None] * cross(e, r)).ravel())
+    u, s, _ = np.linalg.svd(np.array(vecs).T, full_matrices=False)
+    keep = np.nonzero(s > 1e-10 * np.max(s))[0]
     return np.ascontiguousarray(u[:, keep])
 
 
@@ -63,15 +90,6 @@ def internal_basis(positions: Array, weights: Array | None = None) -> Array:
     rb = rigid_basis(positions, weights)
     q, _ = np.linalg.qr(rb, mode="complete")
     return np.ascontiguousarray(q[:, rb.shape[1] :])
-
-
-def project_rigid(
-    vector: Array, positions: Array, weights: Array | None = None
-) -> Array:
-    """Remove rigid translation and rotation from a flattened vector."""
-    rb = rigid_basis(positions, weights)
-    v = np.asarray(vector, dtype=float).ravel()
-    return v - rb @ (rb.T @ v)
 
 
 def align(mobile: Array, reference: Array, weights: Array | None = None) -> Array:

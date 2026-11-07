@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from qcref import constants as c
 
 HessianSource = Literal["auto", "exact", "model", "identity", "finite_difference"]
@@ -63,7 +63,8 @@ class OptimizationKeywords(_Keywords):
     """Keywords of minimizations (``optimization``) and ``transition_state`` searches.
 
     Attributes:
-        maxiter: Most steps (gradients at new geometries) before giving up.
+        maxiter: Most iterations before giving up: steps tried, including those whose
+            back-transformation failed, and saddle escapes.
         convergence: The convergence criteria.
         coordinates: ``tric``: delocalized internal coordinates with each fragment's
             translation and rotation (Wang and Song, 2016); ``dlc``: delocalized
@@ -79,21 +80,26 @@ class OptimizationKeywords(_Keywords):
             energy and gradient. On 100 Reaction-QM transition states at g-xTB, GFN2
             starting Hessians halved the total time and found a first-order saddle in
             all 100 (98 the same as from the exact start).
-        hessian_every: Recompute the Hessian every this many steps (0: never). On the
-            same benchmark at g-xTB, where a Hessian costs about 38 gradients, every
+        hessian_every: Recompute the exact Hessian (the Hessian subprogram's, else
+            finite differences of gradients) every this many steps (0: never). On the
+            same benchmark at g-xTB, where a Hessian costs about 28 gradients, every
             schedule tried (1, 3, 5) cost more than the default; with a lower-level
             Hessian program it also replaces the updated Hessian, which loses the target
             method's curvature (GFN2 every step: 67 of 100 g-xTB saddles).
         recompute_hessian_on_loss: Transition states: recompute the Hessian when the
-            updated one has lost its negative eigenvalue.
+            updated one has lost its negative eigenvalue (with a Hessian subprogram,
+            or when the search started from an exact or finite-difference one).
         min_steps_between_hessians: Steps between such recomputations, at least.
         lost_curvature: The negative mode counts as lost once its curvature is above
             minus this (Hartree/bohr^2, or per internal unit).
         update: The quasi-Newton update between exact Hessians; ``auto``: BFGS for
             minima, TS-BFGS for transition states.
-        trust: Starting trust radius (bohr): the largest atomic displacement of a
-            step, or with ``trust_type="norm"`` the norm of the whole step.
-        trust_type: How a step is measured against the trust radius.
+        trust: Starting trust radius. In Cartesian coordinates, the largest atomic
+            displacement of a step (bohr), or with ``trust_type="norm"`` the norm
+            of the whole step. In internal coordinates (``tric``, ``dlc``), the norm
+            of the step in those coordinates (bohr and radians, rotations scaled to
+            lengths), whatever ``trust_type`` says.
+        trust_type: How a Cartesian step is measured against the trust radius.
         trust_min: Smallest trust radius.
         trust_max: Largest trust radius.
         frozen_atoms: 0-based indices of atoms that do not move.
@@ -103,7 +109,7 @@ class OptimizationKeywords(_Keywords):
             one step while it is brought to its target.
         mode: Transition states: a guide direction ``(n_atoms, 3)`` (such as a path's
             tangent at its highest image); the Hessian eigenvector overlapping it most
-            is the one climbed. None: the lowest.
+            is the one climbed. None: the lowest. Needs ``coordinates="cartesian"``.
         follow: With a guide ``mode``, ``overlap`` keeps climbing the eigenvector most
             like the previous step's; ``lowest`` uses the guide only for the first
             step and then climbs the lowest.
@@ -114,7 +120,8 @@ class OptimizationKeywords(_Keywords):
             subprogram, or finite differences of gradients without one).
         escape_saddles: Minimizations: check the converged structure's frequencies
             and, if it is a saddle point, step off it along the lowest mode and
-            minimize again, up to this many times (0: no check).
+            minimize again, up to this many times (0: no check). A structure still
+            a saddle point after that fails. Not with constraints.
         escape_step: Largest atomic displacement (bohr) of such a step.
         imaginary_cutoff: Frequencies below minus this (cm^-1) count as imaginary.
         fd_step: Step (bohr) of finite-difference Hessians.
@@ -146,6 +153,15 @@ class OptimizationKeywords(_Keywords):
     imaginary_cutoff: float = 10.0
     fd_step: float = Field(default=0.005, gt=0)
 
+    @model_validator(mode="after")
+    def _mode_in_cartesians(self) -> OptimizationKeywords:
+        if self.mode is not None and self.coordinates != "cartesian":
+            raise ValueError(
+                "a guide mode is followed in Cartesian coordinates only: "
+                "pass coordinates='cartesian' with mode"
+            )
+        return self
+
 
 class IRCKeywords(_Keywords):
     """Keywords of ``irc`` calculations.
@@ -155,16 +171,23 @@ class IRCKeywords(_Keywords):
         step_size: Arc length of each step in mass-weighted coordinates
             (bohr amu^1/2). A step that overshoots the valley floor (the energy
             rises, or the new gradient points along the step) is retried at half the
-            length. On 100 Reaction-QM IRCs at g-xTB, GS2 at 0.3 reached the same
-            minima as Sella in all 100 with a median of 375 gradients (ends included)
-            against LQA at 0.1's 528; LQA
-            at 0.3 and GS2 at 0.5 each ended one in another minimum.
-        max_steps: Most steps per branch.
+            length. On 100 Reaction-QM IRCs at g-xTB (axtb's default SCF accuracy),
+            GS2 at 0.3 reached the same minima as Sella in all 100 with a median of 375
+            gradients (ends included) against LQA at 0.1's 528; LQA at 0.3 and GS2 at
+            0.5 each ended one in another minimum. At SCF accuracy 0.01, GS2 at 0.3
+            matched Sella's minima in 96 (the other 4 neighboring minima of the same
+            species) with a median of 356.5.
+        max_steps: Most steps per branch. A branch that reaches it leaves the IRC
+            unconverged (``success=False``, frames kept), unless ``minimize_ends``
+            then converged its end.
         method: ``lqa``: local quadratic approximation (Page and McIver, 1988) on
             the current Hessian; ``gs2``: Gonzalez and Schlegel's constrained step
             (1989), each point on the sphere around a pivot half a step down the
             gradient, found on the quadratic model (one gradient per step).
-        initial_hessian: Hessian at the transition state; see OptimizationKeywords.
+        initial_hessian: Hessian at the transition state: ``auto``/``exact`` (the
+            Hessian subprogram's, else finite differences) or ``finite_difference``.
+            An IRC starts along the transition state's negative mode, so it needs
+            one of these.
         hessian_every: Recompute the exact Hessian every this many steps (0: only
             at the transition state, then updated).
         update: Update between exact Hessians.
@@ -200,3 +223,12 @@ class IRCKeywords(_Keywords):
     end_coordinates: Literal["tric", "dlc", "cartesian"] = "tric"
     end_convergence: Convergence = Convergence()
     end_maxiter: int = Field(default=500, ge=1)
+
+    @model_validator(mode="after")
+    def _exact_start(self) -> IRCKeywords:
+        if self.initial_hessian in ("model", "identity"):
+            raise ValueError(
+                f"an IRC needs the transition state's Hessian, not "
+                f"initial_hessian={self.initial_hessian!r}"
+            )
+        return self

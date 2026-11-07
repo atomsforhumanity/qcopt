@@ -58,9 +58,15 @@ def _subprogram(inp: ProgramInput, calctype: CalcType) -> ProgramSpec | None:
 
 
 def _separate(grad: ProgramSpec, hess: ProgramSpec | None) -> bool:
-    """Whether Hessians come from another program or method than the gradients."""
+    """Whether Hessians come from another calculation than the gradients.
+
+    Another program, method or keywords (such as a solvent or an SCF accuracy) is
+    another energy surface: its energies and gradients never enter the frames.
+    """
     return hess is not None and (
-        hess.program != grad.program or hess.model != grad.model
+        hess.program != grad.program
+        or hess.model != grad.model
+        or dict(hess.keywords) != dict(grad.keywords)
     )
 
 
@@ -84,6 +90,11 @@ def _prepare(inp: ProgramInput) -> tuple[TaskContext, Any]:
         if inp.calctype == CalcType.irc
         else OptimizationKeywords(**inp.keywords)
     )
+    if hess is not None and kw.initial_hessian == "finite_difference":
+        raise ValueError(
+            "initial_hessian='finite_difference' takes the Hessian from gradients; "
+            "with a Hessian subprogram, use 'exact' (or leave it 'auto')"
+        )
     s = inp.require_structure()
     ctx = TaskContext(
         symbols=list(s.symbols),
@@ -177,16 +188,25 @@ def _output(
     extras["converged"] = result.converged
     if result.frequencies is not None:
         f = result.frequencies
-        frames[-1] = frames[-1].model_copy(
-            update={
-                "results": frames[-1].results.model_copy(
-                    update={
-                        "freqs_wavenumber": [float(w) for w in f.wavenumbers],
-                        "normal_modes_cartesian": f.modes,
-                    }
-                )
+        if keep:
+            frames[-1] = frames[-1].model_copy(
+                update={
+                    "results": frames[-1].results.model_copy(
+                        update={
+                            "freqs_wavenumber": [float(w) for w in f.wavenumbers],
+                            "normal_modes_cartesian": f.modes,
+                        }
+                    )
+                }
+            )
+        else:  # from the separate Hessian program: not the frame's own method
+            hspec = _subprogram(inp, CalcType.hessian)
+            assert hspec is not None
+            extras["frequencies"] = {
+                "program": hspec.program,
+                "method": None if hspec.model is None else hspec.model.method,
+                "wavenumbers": [float(w) for w in f.wavenumbers],
             }
-        )
     if inp.calctype == CalcType.irc:
         data = PathData(
             provenance=prov, frames=frames, ts_index=result.ts_index, extras=extras
@@ -227,6 +247,11 @@ def run(inputs: ProgramInput | Sequence[ProgramInput], *, evaluator: Any = None)
     Returns:
         One ``ProgramOutput`` or a list in input order. A calculation that fails or
         does not converge has ``success=False`` and keeps its frames.
+
+    Raises:
+        ValueError: An input qcopt cannot run (wrong program or calculation type,
+            missing gradient subprogram, unknown or invalid keywords), checked for
+            every input before anything is computed.
     """
     single = isinstance(inputs, ProgramInput)
     items: list[ProgramInput] = (

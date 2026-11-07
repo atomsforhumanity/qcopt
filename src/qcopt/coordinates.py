@@ -13,7 +13,7 @@ from collections.abc import Sequence
 import numpy as np
 
 from . import primitives as prim
-from .geometry import Array, max_atomic_norm
+from .geometry import Array, max_atomic_norm, rigid_basis
 from .internal import LINEAR_DEGREES, CoordinateError, DelocalizedInternals
 from .space import CartesianSpace
 
@@ -104,11 +104,12 @@ class InternalCoordinates:
         """Internal gradient; records how much of the Cartesian one it misses."""
         g = np.asarray(gradient, dtype=float).ravel()
         b = self.ic.b_matrix(x)
-        gs = np.linalg.solve(b @ b.T, b @ g)
+        try:
+            gs = np.linalg.solve(b @ b.T, b @ g)
+        except np.linalg.LinAlgError:  # degenerate coordinates: the residual asks
+            gs = np.linalg.lstsq(b @ b.T, b @ g, rcond=None)[0]  # for a rebuild
         rest = g - b.T @ gs
         xx = np.asarray(x, dtype=float).reshape(-1, 3)
-        from .geometry import rigid_basis
-
         rb = rigid_basis(xx)
         rest -= rb @ (rb.T @ rest)
         self.residual = max_atomic_norm(rest)
@@ -127,8 +128,6 @@ class InternalCoordinates:
         """Find the internal directions of overall translation and rotation at ``x``."""
         if not self.tric:
             return
-        from .geometry import rigid_basis
-
         xx = np.asarray(x, dtype=float).reshape(-1, 3)
         rs = self.ic.b_matrix(xx) @ rigid_basis(
             xx
@@ -154,17 +153,33 @@ class InternalCoordinates:
         return np.asarray(jx, dtype=float) @ b.T @ np.linalg.inv(b @ b.T)
 
     def step(self, x: Array, d: Array) -> tuple[Array, Array, bool]:
-        """Back-transform an internal step."""
-        return self.ic.step(x, d)
+        """Back-transform an internal step; degenerate coordinates count as a failure."""
+        try:
+            return self.ic.step(x, d)
+        except np.linalg.LinAlgError:
+            xx = np.asarray(x, dtype=float).reshape(-1, 3)
+            return xx, np.zeros_like(np.asarray(d, dtype=float)), False
 
     def size(self, d: Array) -> float:
         """Norm of the internal step."""
         return float(np.linalg.norm(d))
 
     def needs_rebuild(self, x: Array) -> bool:
-        """Whether a bend has become linear, or a linear bend bent, since building."""
+        """Whether the coordinates should be rebuilt at ``x``.
+
+        When a bend has become linear or a linear bend bent, a fragment has rotated
+        far, a torsion has turned more than 90 degrees from its reference (a step
+        across +-180 degrees cannot be back-transformed), or a linear molecule has
+        bent (delocalized internals then lose a motion to rigid rotation).
+        """
         p = self.ic.prims
         xx = np.asarray(x, dtype=float).reshape(-1, 3)
+        if not self.tric and rigid_basis(xx).shape[1] != self.ic.n_rigid:
+            return True
+        if p.periodic.any():
+            drift = self.ic.primitive_values(xx) - self.ic.q_ref
+            if np.abs(drift[p.periodic]).max() > 0.5 * np.pi:
+                return True
         if len(p.bends):
             if np.degrees(prim.bend_values(xx, p.bends)).max() >= LINEAR_DEGREES + 2.0:
                 return True

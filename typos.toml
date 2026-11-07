@@ -1,2 +1,4 @@
 [default.extend-words]
 Besalu = "Besalu"
+shs = "shs"      # s.H.s in the Hessian updates
+Comput = "Comput"  # J. Comput. Chem.

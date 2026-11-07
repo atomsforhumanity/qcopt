@@ -19,6 +19,8 @@ from . import primitives as prim
 from .geometry import Array
 from .keywords import Constraints
 
+_MAX_ANGLE_DEGREES = 175.0
+
 _KINDS = {
     "distance": (2, prim.stretch_values, prim.stretch_derivatives),
     "angle": (3, prim.bend_values, prim.bend_derivatives),
@@ -32,15 +34,23 @@ class ConstraintSet:
     Args:
         spec: The ``constraints`` keyword.
         positions: Starting geometry (bohr); targets left out keep its values.
+        frozen: Atoms that do not move.
 
     Raises:
-        ValueError: An entry names the wrong number of atoms or repeats one.
+        ValueError: An entry names the wrong number of atoms or repeats one; the
+            same constraint is given twice; a constraint involves only frozen atoms
+            (it is held already); or an angle is constrained at or near 180 degrees,
+            where its derivative vanishes (constrain distances instead).
     """
 
-    def __init__(self, spec: Constraints, positions: Array) -> None:
+    def __init__(
+        self, spec: Constraints, positions: Array, frozen: Sequence[int] = ()
+    ) -> None:
         """Collect index arrays and targets (bohr, radians)."""
         x = np.asarray(positions, dtype=float).reshape(-1, 3)
         n_atoms = len(x)
+        fixed = {int(a) for a in frozen}
+        seen: set[tuple[int, ...]] = set()
         self.groups: list[tuple[str, np.ndarray, Array]] = []
         for kind, (k, values, _) in _KINDS.items():
             entries = getattr(spec, kind)
@@ -55,6 +65,14 @@ class ConstraintSet:
                 atoms = [int(a) for a in entry[:k]]
                 if len(set(atoms)) != k or min(atoms) < 0 or max(atoms) >= n_atoms:
                     raise ValueError(f"bad atoms in {kind} constraint {entry}")
+                key = min(tuple(atoms), tuple(reversed(atoms)))
+                if key in seen:
+                    raise ValueError(f"{kind} constraint {entry} is given twice")
+                seen.add(key)
+                if set(atoms) <= fixed:
+                    raise ValueError(
+                        f"{kind} constraint {entry} involves only frozen atoms"
+                    )
                 idx.append(atoms)
                 targets.append(None if len(entry) == k else float(entry[k]))
             index = np.array(idx, dtype=np.intp)
@@ -67,6 +85,12 @@ class ConstraintSet:
                     for i, t in enumerate(targets)
                 ]
             )
+            if kind == "angle" and np.degrees(target).max() > _MAX_ANGLE_DEGREES:
+                raise ValueError(
+                    f"angle constraints above {_MAX_ANGLE_DEGREES:g} degrees are not "
+                    "supported (the angle's derivative vanishes at 180); constrain "
+                    "distances instead"
+                )
             self.groups.append((kind, index, target))
         self.size = sum(len(i) for _, i, _ in self.groups)
         self.n_atoms = n_atoms
@@ -122,10 +146,3 @@ def free_gradient(jx: Array, gradient: Array) -> Array:
         return g
     lam = np.linalg.lstsq(jx.T, g, rcond=None)[0]
     return g - jx.T @ lam
-
-
-def as_indices(entries: Sequence[Sequence[float]], k: int) -> np.ndarray:
-    """Atom indices of constraint entries (for adding them to primitives)."""
-    return np.array([[int(a) for a in e[:k]] for e in entries], dtype=np.intp).reshape(
-        -1, k
-    )

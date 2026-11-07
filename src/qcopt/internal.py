@@ -24,7 +24,7 @@ import numpy as np
 from qcref import periodic_table as pt
 
 from . import primitives as prim
-from .geometry import Array, rigid_basis
+from .geometry import Array, is_linear, rigid_basis
 
 #: Bends at or above this angle (degrees) become linear bends.
 LINEAR_DEGREES = 175.0
@@ -43,15 +43,14 @@ class Fragment:
     """A covalently bonded fragment's rigid-body coordinates (TRIC).
 
     Translation: the centroid of its atoms (3). Rotation: the rotation vector taking
-    its reference geometry onto the current one, times its radius of gyration so it
-    is a length (3), or for a linear fragment the tilt of its axis along two fixed
-    perpendicular directions, times the radius of gyration (2). One atom: no
-    rotation.
+    its reference geometry onto the current one, times ``rg`` so it is a length (3),
+    or for a linear fragment the tilt of its axis along two fixed perpendicular
+    directions, times ``rg`` (2). One atom: no rotation.
 
     Attributes:
         atoms: Atom indices.
         ref: Reference positions, centered.
-        rg: Radius of gyration of the reference (bohr).
+        rg: Radius of gyration of the reference, at least 1 bohr (bohr).
         linear: Whether the fragment is linear.
         axes: For a linear fragment, the reference axis and two perpendicular
             directions ``(3, 3)``.
@@ -143,18 +142,6 @@ def _rotation_jacobian(ref: Array, cur: Array) -> Array:
     v = _quaternion_to_vector(shifted)
     jac_q = ((v[:4] - v[4:]) / (2 * h)).T  # (3, 4)
     return jac_q @ dq.T
-
-
-def _fragment_values(frag: Fragment, x: Array) -> Array:
-    xs = x[frag.atoms]
-    out = [xs.mean(axis=0)]
-    if frag.n_rotation == 3:
-        out.append(frag.rg * _rotation_vectors(frag.ref, xs[None])[0])
-    elif frag.n_rotation == 2:
-        u = xs[-1] - xs[0]
-        u = u / np.linalg.norm(u)
-        out.append(frag.rg * (frag.axes[1:] @ u))
-    return np.concatenate(out)
 
 
 def _all_fragment_values(frags: list[Fragment], x: Array) -> Array:
@@ -598,15 +585,16 @@ class DelocalizedInternals:
         expected = (
             3 * n
             if tric
-            else (
-                3 * n - (5 if _is_linear(x) else 6) if n > 2 else (1 if n == 2 else 0)
-            )
+            else (3 * n - (5 if is_linear(x) else 6) if n > 2 else (1 if n == 2 else 0))
         )
         if int(keep.sum()) < expected:
             raise CoordinateError(
                 f"primitives span {int(keep.sum())} of {expected} internal motions"
             )
         self.u = np.ascontiguousarray(vecs[:, keep])
+        # Rigid motions projected out of the DLC B matrix: when this changes (a linear
+        # molecule bends), the coordinates no longer span the internal motions.
+        self.n_rigid = rigid_basis(x).shape[1]
         self.q_ref = self.prims.values(x)
         self.n = self.u.shape[1]
         # A step evaluates the same geometry several times (its start, the gradient

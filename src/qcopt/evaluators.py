@@ -146,7 +146,9 @@ class AxtbEvaluator:
         self._axtb = axtb
         self.workers = workers
         self.version = _version("axtb")
-        self._calcs: dict[tuple[int, str], Any] = {}
+        # (task, kind) -> (the calculator's setup, the calculator); a new setup (another
+        # run's task with the same index) replaces it
+        self._calcs: dict[tuple[int, str], tuple[tuple[Any, ...], Any]] = {}
 
     @staticmethod
     def handles(context: TaskContext) -> bool:
@@ -162,7 +164,13 @@ class AxtbEvaluator:
         return context.hessian_spec is not None
 
     def _settings(self, spec: Any) -> tuple[str, dict[str, Any], dict[str, Any]]:
-        method = spec.model.method if spec.model is not None else "gfn2"
+        if getattr(spec, "program", None) != "axtb":
+            raise ValueError(
+                f"the axtb evaluator computes axtb specs, not {spec.program!r}"
+            )
+        if spec.model is None or not spec.model.method:
+            raise ValueError("axtb needs model.method, such as gfn2 or gxtb-v2.0.1")
+        method = spec.model.method
         kw = dict(spec.keywords)
         unknown = set(kw) - _AXTB_CALCULATOR - _AXTB_HESSIAN
         if unknown:
@@ -194,11 +202,13 @@ class AxtbEvaluator:
             }
         )
         key = (r.task, "gradient" if (kind == "gradient" or same) else "hessian")
-        calc = self._calcs.get(key)
-        if calc is None:
-            from qcref import periodic_table as pt
+        from qcref import periodic_table as pt
 
-            numbers = [int(getattr(pt, s.capitalize()).number) for s in ctx.symbols]
+        numbers = [int(getattr(pt, s.capitalize()).number) for s in ctx.symbols]
+        setup = (method, numbers, ctx.charge, ctx.multiplicity, calc_kw)
+        cached = self._calcs.get(key)
+        calc = cached[1] if cached is not None and cached[0] == setup else None
+        if calc is None:
             calc = self._axtb.Calculator(
                 method,
                 numbers,
@@ -207,7 +217,7 @@ class AxtbEvaluator:
                 uhf=int(ctx.multiplicity) - 1,
                 **calc_kw,
             )
-            self._calcs[key] = calc
+            self._calcs[key] = (setup, calc)
         return calc, hess_kw
 
     def _run(self, r: Request) -> Answer:
@@ -242,12 +252,12 @@ class AxtbEvaluator:
         """Compute the requests; one task's in order, tasks side by side."""
         workers = self.workers
         if workers is None:
-            threads = (
-                max(
-                    1, int(requests[0].context.gradient_spec.keywords.get("threads", 1))
-                )
-                if requests
-                else 1
+            threads = max(
+                [1]
+                + [
+                    int(r.context.gradient_spec.keywords.get("threads", 1))
+                    for r in requests
+                ]
             )
             workers = max(
                 1,
@@ -312,50 +322,98 @@ class ComputeEvaluator:
         outputs = self.compute(inputs)
         if not isinstance(outputs, list):
             outputs = [outputs]
-        answers = []
-        for r, out in zip(requests, outputs, strict=True):
-            x = np.asarray(r.positions, dtype=float)
-            res = out.results
-            prov = getattr(res, "provenance", None)
-            if not out.success:
-                answers.append(
-                    Answer(
-                        positions=x,
-                        success=False,
-                        error=out.traceback,
-                        output=out,
-                        program=getattr(prov, "program", None),
-                        program_version=getattr(prov, "program_version", None),
-                    )
-                )
-                continue
-            answers.append(
-                Answer(
-                    positions=x,
-                    energy=float(res.energy),
-                    gradient=np.asarray(res.gradient, dtype=float).reshape(-1, 3),
-                    hessian=None
-                    if res.hessian is None
-                    else np.asarray(res.hessian, dtype=float),
-                    output=out,
-                    program=getattr(prov, "program", None),
-                    program_version=getattr(prov, "program_version", None),
-                )
-            )
-        return answers
+        return [
+            _compute_answer(r, out) for r, out in zip(requests, outputs, strict=True)
+        ]
+
+    def hessian_includes_gradient(self, context: TaskContext) -> bool:
+        """No: a codec's Hessian output need not carry the gradient (xtb's doesn't)."""
+        return False
+
+
+def _compute_answer(r: Request, out: Any) -> Answer:
+    """One request's answer from its ``ProgramOutput``; unreadable ones fail."""
+    x = np.asarray(r.positions, dtype=float)
+    res = getattr(out, "results", None)
+    prov = getattr(res, "provenance", None)
+    program = getattr(prov, "program", None)
+    version = getattr(prov, "program_version", None)
+    if not getattr(out, "success", False):
+        error = getattr(out, "traceback", None) or "the calculation failed"
+        return Answer(
+            positions=x,
+            success=False,
+            error=error,
+            output=out,
+            program=program,
+            program_version=version,
+        )
+    try:
+        energy = getattr(res, "energy", None)
+        gradient = getattr(res, "gradient", None)
+        hessian = getattr(res, "hessian", None)
+        if r.kind == "gradient" and (energy is None or gradient is None):
+            raise ValueError("the output has no energy or gradient")
+        if r.kind == "hessian" and hessian is None:
+            raise ValueError("the output has no Hessian")
+        return Answer(
+            positions=x,
+            energy=float("nan") if energy is None else float(energy),
+            gradient=None
+            if gradient is None
+            else np.asarray(gradient, dtype=float).reshape(-1, 3),
+            hessian=None if hessian is None else np.asarray(hessian, dtype=float),
+            output=out,
+            program=program,
+            program_version=version,
+        )
+    except Exception as exc:  # noqa: BLE001 - reported in the answer
+        return Answer(
+            positions=x,
+            success=False,
+            error=f"reading the {program or 'program'} output: {exc}",
+            output=out,
+            program=program,
+            program_version=version,
+        )
 
 
 class RoutingEvaluator:
     """Sends each task to the evaluator chosen for it; one call per evaluator."""
 
-    def __init__(self, evaluators: Sequence[Any], choice: Sequence[int]) -> None:
-        """Bind evaluators and the index of the one for each task."""
+    def __init__(
+        self,
+        evaluators: Sequence[Any],
+        choice: Sequence[int],
+        contexts: Sequence[TaskContext] | None = None,
+    ) -> None:
+        """Bind evaluators, the index of the one for each task, and the tasks."""
         self.evaluators = list(evaluators)
         self.choice = list(choice)
+        self._by_context = (
+            {}
+            if contexts is None
+            else {
+                id(ctx): self.evaluators[e]
+                for ctx, e in zip(contexts, choice, strict=True)
+            }
+        )
+
+    def _for(self, context: TaskContext) -> Any:
+        return self._by_context.get(id(context))
 
     def supports_hessian(self, context: TaskContext) -> bool:
-        """Delegate to the task's evaluator (looked up by context identity)."""
-        return context.hessian_spec is not None
+        """Delegate to the task's evaluator."""
+        ev = self._for(context)
+        if ev is None:
+            return context.hessian_spec is not None
+        return bool(ev.supports_hessian(context))
+
+    def hessian_includes_gradient(self, context: TaskContext) -> bool:
+        """Delegate to the task's evaluator."""
+        ev = self._for(context)
+        check = getattr(ev, "hessian_includes_gradient", None)
+        return True if check is None else bool(check(context))
 
     def __call__(self, requests: Sequence[Request]) -> list[Answer]:
         """Split by evaluator, compute, and merge back in order."""
@@ -384,5 +442,7 @@ def default_evaluator(contexts: Sequence[TaskContext]) -> Any:
     if not any(use_axtb):
         return ComputeEvaluator()
     return RoutingEvaluator(
-        [AxtbEvaluator(), ComputeEvaluator()], [0 if u else 1 for u in use_axtb]
+        [AxtbEvaluator(), ComputeEvaluator()],
+        [0 if u else 1 for u in use_axtb],
+        contexts,
     )

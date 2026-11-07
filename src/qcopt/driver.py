@@ -11,7 +11,7 @@ finite-difference Hessian are computed together (batched, or side by side).
 from __future__ import annotations
 
 from collections.abc import Generator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Protocol
 
 import numpy as np
@@ -124,7 +124,12 @@ class Evaluator(Protocol):
         ...
 
     def supports_hessian(self, context: TaskContext) -> bool:
-        """Whether Hessians can be computed directly (else finite differences)."""
+        """Whether Hessians can be computed directly (else finite differences).
+
+        An evaluator may also define ``hessian_includes_gradient(context)``; when it
+        returns False, each Hessian is paired with a gradient computed (or just
+        computed) by the gradient program.
+        """
         ...
 
 
@@ -152,7 +157,7 @@ def _fd_hessian(
             positions=x,
             success=False,
             error=f"finite-difference Hessian: {failed[0].error}",
-            n_gradients=len(answers),
+            n_gradients=len(answers) + (1 if center else 0),
         )
     hess = np.zeros((n, n))
     for i in range(n):
@@ -171,6 +176,31 @@ def _fd_hessian(
         program_version=base.program_version,
         n_gradients=len(answers) + (1 if center is not None else 0),
     )
+
+
+def _finite(request: Request, answer: Answer) -> Answer:
+    """A successful answer with NaN or infinite values becomes a failed one."""
+    if not answer.success:
+        return answer
+    parts: list[tuple[str, Any]] = [("Hessian", answer.hessian)]
+    if request.kind == "gradient":
+        parts = [("energy", answer.energy), ("gradient", answer.gradient), *parts]
+    else:
+        parts = [("gradient", answer.gradient), *parts]
+    for what, value in parts:
+        if value is None:
+            if what == "gradient" and request.kind == "gradient":
+                return replace(answer, success=False, error="no gradient computed")
+            continue
+        if not np.all(np.isfinite(np.asarray(value, dtype=float))):
+            return replace(answer, success=False, error=f"non-finite {what}")
+    return answer
+
+
+def _hessian_brings_gradient(evaluator: Any, context: TaskContext) -> bool:
+    """Whether the evaluator's Hessian answers carry the energy and gradient too."""
+    check = getattr(evaluator, "hessian_includes_gradient", None)
+    return True if check is None else bool(check(context))
 
 
 def _remember(cache: dict[bytes, Answer], x: Array, answer: Answer) -> None:
@@ -233,6 +263,12 @@ def drive(
         except Exception as exc:  # noqa: BLE001 - reported as the task's result
             results[i] = exc
     direct = [evaluator.supports_hessian(ctx) for ctx in contexts]
+    # A Hessian is paired with the gradient program's energy and gradient when it
+    # comes from another program, or when the evaluator's Hessians come without them.
+    split = [
+        ctx.separate_hessian or (d and not _hessian_brings_gradient(evaluator, ctx))
+        for ctx, d in zip(contexts, direct, strict=True)
+    ]
     # Each task's latest gradient answers by geometry, so a Hessian from a separate
     # program at a point just computed does not compute its gradient again.
     recent: list[dict[bytes, Answer]] = [{} for _ in algorithms]
@@ -246,7 +282,7 @@ def drive(
             for ask in asks:
                 x = np.asarray(ask.positions, dtype=float).reshape(-1, 3)
                 start = len(requests)
-                if ask.kind == "hessian" and ctx.separate_hessian:
+                if ask.kind == "hessian" and split[i]:
                     if not direct[i]:
                         plan.append(("unsupported", start, start, ask))
                         continue
@@ -266,7 +302,19 @@ def drive(
                     requests.append(Request(i, ask.kind, x, ctx))
                     plan.append(("direct", start, len(requests), ask))
             plans[i] = plan
-        answers = evaluator(requests) if requests else []
+        try:
+            answers = list(evaluator(requests)) if requests else []
+            if len(answers) != len(requests):
+                raise RuntimeError(
+                    f"{len(answers)} answers for {len(requests)} requests"
+                )
+        except Exception as exc:  # noqa: BLE001 - every request of the round failed
+            error = f"evaluator failed: {type(exc).__name__}: {exc}"
+            answers = [
+                Answer(positions=r.positions, success=False, error=error)
+                for r in requests
+            ]
+        answers = [_finite(r, a) for r, a in zip(requests, answers, strict=True)]
         nxt: dict[int, list[Ask]] = {}
         for i, plan in plans.items():
             replies = []
