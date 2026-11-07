@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.2.0] - 2026-11-07
+
 ### Fixed
 
 - A transition-state search that ends where the Hessian has no negative curvature
