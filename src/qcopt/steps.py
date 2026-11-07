@@ -55,7 +55,7 @@ def _shift_below(d: Array, g2: Array, hmin: float, alpha: float) -> float:
             -1.0 - alpha * float((q / (d + mu)).sum()),
         )
 
-    lo, hi = 1e-30, max(0.0, hmin) + np.sqrt(alpha * total) + 1.0
+    lo, hi = 1e-100, max(0.0, hmin) + np.sqrt(alpha * total) + 1.0
     if f(lo)[0] <= 0.0:
         return lo
     mu = float(np.clip(max(hmin, 0.0) + 1e-3, lo * 10, hi))
@@ -74,9 +74,17 @@ def _shift_below(d: Array, g2: Array, hmin: float, alpha: float) -> float:
     return mu
 
 
-def _shift_above(h: float, g2: float, alpha: float) -> float:
-    """The highest root of lambda = alpha g2 / (lambda - h) (one maximized mode)."""
-    return 0.5 * (h + np.sqrt(h * h + 4.0 * alpha * g2))
+def _above_denominator(h: float, g2: float, alpha: float) -> float:
+    """``h - lambda`` for the highest root of lambda = alpha g2 / (lambda - h).
+
+    The maximized mode's denominator, in a form without cancellation: for h > 0
+    and a tiny gradient the textbook root 0.5 (h + sqrt(h^2 + 4 alpha g2)) equals h
+    to machine precision, and the step loses its component along the mode.
+    """
+    root = float(np.sqrt(h * h + 4.0 * alpha * g2))
+    if h > 0:
+        return -2.0 * alpha * g2 / (h + root)
+    return 0.5 * (h - root)
 
 
 def _rfo(vals: Array, gt: Array, alpha: float, mode: int | None) -> tuple[Array, float]:
@@ -85,8 +93,7 @@ def _rfo(vals: Array, gt: Array, alpha: float, mode: int | None) -> tuple[Array,
     keep = np.ones(len(vals), dtype=bool)
     if mode is not None:
         keep[mode] = False
-        lam = _shift_above(float(vals[mode]), float(gt[mode] ** 2), alpha)
-        denom = vals[mode] - lam
+        denom = _above_denominator(float(vals[mode]), float(gt[mode] ** 2), alpha)
         s[mode] = -gt[mode] / denom if abs(denom) > _TINY else 0.0
     v, g = vals[keep], gt[keep]
     if v.size:

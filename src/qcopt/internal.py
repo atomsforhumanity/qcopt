@@ -449,11 +449,19 @@ def build_primitives(
             for q in range(p + 1, len(nb)):
                 i, k = nb[p], nb[q]
                 ang = np.degrees(prim.bend_values(x, np.array([[i, j, k]]))[0])
+                if ang <= 180.0 - LINEAR_DEGREES:
+                    continue  # i and k on the same side of j: a singular bend
                 (linear if ang >= LINEAR_DEGREES else bends).append((i, j, k))
 
     def is_linear(i: int, j: int, k: int) -> bool:
         ang = np.degrees(prim.bend_values(x, np.array([[i, j, k]]))[0])
         return bool(ang >= LINEAR_DEGREES or ang <= 180.0 - LINEAR_DEGREES)
+
+    def well_defined(t: tuple[int, int, int, int]) -> bool:
+        """Both angles of the torsion are clear of 0 and 180 degrees."""
+        angles = np.degrees(prim.bend_values(x, np.array([t[:3], t[1:]])))
+        lo, hi = 180.0 - LINEAR_DEGREES, LINEAR_DEGREES
+        return bool(np.all((angles > lo) & (angles < hi)))
 
     torsions: set[tuple[int, int, int, int]] = set()
     for j0, k0 in edges:
@@ -466,7 +474,7 @@ def build_primitives(
                     if len({i, jj, kk, l_}) < 4:
                         continue
                     t = (i, jj, kk, l_)
-                    if (l_, kk, jj, i) not in torsions:
+                    if (l_, kk, jj, i) not in torsions and well_defined(t):
                         torsions.add(t)
 
     # Out-of-plane motion at atoms with three neighbors, as an improper torsion
@@ -483,7 +491,9 @@ def build_primitives(
             (nb[1], nb[2], nb[0]),
         ):
             ang = np.degrees(prim.bend_values(x, np.array([[a_, c, b_]]))[0])
-            if ang < LINEAR_DEGREES and (pick is None or ang > pick[0]):
+            if not well_defined((a_, c, b_, d_)):
+                continue
+            if pick is None or ang > pick[0]:
                 pick = (float(ang), a_, b_, d_)
         if pick is not None:
             _, a_, b_, d_ = pick
@@ -718,7 +728,10 @@ class DelocalizedInternals:
             prev = nerr
             if np.abs(dx).max() < tol:
                 sk = self.values(xk)
-                return xk, sk - s0, True
+                # converged, but to the requested point? (a rotation coordinate
+                # can land on its pi-flipped twin)
+                miss = float(np.linalg.norm(target - sk))
+                return xk, sk - s0, miss <= max(1e-3, 0.1 * float(np.linalg.norm(ds)))
             if nerr > 1e3 * max(best[0], 1e-12) and nerr > 1.0:
                 break
         _, xb, sb = best

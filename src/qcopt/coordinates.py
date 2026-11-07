@@ -181,7 +181,8 @@ class InternalCoordinates:
             if np.abs(drift[p.periodic]).max() > 0.5 * np.pi:
                 return True
         if len(p.bends):
-            if np.degrees(prim.bend_values(xx, p.bends)).max() >= LINEAR_DEGREES + 2.0:
+            angles = np.degrees(prim.bend_values(xx, p.bends))
+            if angles.max() >= LINEAR_DEGREES + 2.0 or angles.min() <= 3.0:
                 return True
         if len(p.linear):
             if np.degrees(prim.bend_values(xx, p.linear)).min() < LINEAR_DEGREES - 15.0:
@@ -192,6 +193,8 @@ class InternalCoordinates:
             a1 = np.degrees(prim.bend_values(xx, p.torsions[:, :3]))
             a2 = np.degrees(prim.bend_values(xx, p.torsions[:, 1:]))
             if max(a1.max(), a2.max()) >= LINEAR_DEGREES + 2.0:
+                return True
+            if min(a1.min(), a2.min()) <= 3.0:
                 return True
         return False
 

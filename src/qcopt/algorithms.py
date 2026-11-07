@@ -637,29 +637,38 @@ def _lqa_step(vals: Array, gt: Array, ds: float) -> Array:
     lam, g = vals[active], gt[active]
 
     def speed(t: Array) -> Array:
-        e = np.exp(np.clip(-np.outer(t, lam), -100, 100))
+        e = np.exp(np.clip(-np.outer(t, lam), -150.0, 150.0))
         return np.sqrt(((g * e) ** 2).sum(axis=1))
 
     gnorm = float(np.linalg.norm(g))
     if gnorm == 0.0:
         return np.zeros_like(gt)
-    t_end = 2.0 * ds / gnorm
-    for _ in range(60):
-        ts = np.linspace(0.0, t_end, 501)
+    # The speed varies on the scales 1/|lambda_i|, which can be far apart, so the arc
+    # length is integrated on a geometric grid (fine near 0, where it changes fastest
+    # when a curvature is large) up to a time long enough to cover ds.
+    t_end = ds / gnorm
+    t_min = 1e-6 * min(t_end, 1.0 / max(float(np.abs(lam).max()), 1e-300))
+    previous = 0.0
+    for _ in range(200):
+        ts = np.concatenate([[0.0], np.geomspace(t_min, max(t_end, 2 * t_min), 4001)])
         v = speed(ts)
         s = np.concatenate([[0.0], np.cumsum(0.5 * (v[1:] + v[:-1]) * np.diff(ts))])
         if s[-1] >= ds:
             t = float(np.interp(ds, s, ts))
             break
+        if s[-1] - previous <= 1e-12 * s[-1]:  # the path ends (at a minimum) before ds
+            t = t_end
+            break
+        previous = float(s[-1])
         t_end *= 2.0
     else:
         t = t_end
-    with np.errstate(divide="ignore", invalid="ignore"):
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
         small = np.abs(lam * t) < 1e-8
         comp = np.where(
             small,
             -g * t,
-            g * np.expm1(np.clip(-lam * t, -100, 100)) / np.where(small, 1.0, lam),
+            g * np.expm1(np.clip(-lam * t, -150.0, 150.0)) / np.where(small, 1.0, lam),
         )
     out = np.zeros_like(gt)
     out[active] = comp

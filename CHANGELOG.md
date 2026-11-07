@@ -55,6 +55,16 @@ All notable changes to this project are documented here. The format follows
   and none when the evaluator itself failed, on every exit; IRC counts include the end
   minimizations.
 - The starting trust radius is kept between `trust_min` and `trust_max`.
+- Internal coordinates leave out bends and torsions that are singular when built (an
+  angle within 5 degrees of 0 or 180), are rebuilt when a bend or a torsion's angle
+  collapses toward 0, and a back-transformation that converges to the wrong point (a
+  rotation coordinate flipped by pi on a bent, nearly linear fragment) counts as failed.
+- RS-P-RFO keeps its step along the climbed mode when the gradient there is tiny (a
+  cancellation in the shift); RS-RFO's shift goes down to 1e-100.
+- The SR1 part of Bofill's update and TS-BFGS use scale-free skip tests, so tiny steps
+  still meet the secant condition.
+- IRC steps by the local quadratic approximation (`method="lqa"`) have the requested arc
+  length when curvatures differ widely, and stop at the end of the path.
 
 ### Changed
 

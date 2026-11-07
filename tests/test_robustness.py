@@ -784,3 +784,99 @@ def test_an_irc_that_cannot_start_points_at_its_frame():
     out = qcopt.irc(_mb(MB_MINIMA[1]), MB, hessian=True, evaluator=_ev())
     assert not out.success
     assert out.results.ts_index == 0
+
+
+# ------------------------------------------------ round 2 (numerical cross-checks)
+
+_ANG = 1.8897261246257702
+
+
+def _c4h2(bend, at=0):
+    """H-C-C-C-C-H along z, bent by ``bend`` degrees at atom ``at + 1``."""
+    x = [np.zeros(3)]
+    for length in (1.06, 1.21, 1.37, 1.21, 1.06):
+        x.append(x[-1] + np.array([0.0, 0.0, length * _ANG]))
+    x = np.array(x)
+    t = np.radians(bend)
+    rot = np.array([[1, 0, 0], [0, np.cos(t), -np.sin(t)], [0, np.sin(t), np.cos(t)]])
+    pivot = x[at + 1].copy()
+    x[at + 2 :] = (x[at + 2 :] - pivot) @ rot.T + pivot
+    return x
+
+
+def test_tric_back_transformation_reports_a_flipped_rotation():
+    x = _c4h2(10.0)
+    coords = make_coordinates("tric", ["H", "C", "C", "C", "C", "H"], x, [], True)
+    rng = np.random.default_rng(1)
+    for _ in range(300):
+        d = rng.normal(size=coords.ic.n)
+        d -= coords._rigid @ (coords._rigid.T @ d)
+        d *= 0.2 / np.linalg.norm(d)
+        _, taken, ok = coords.step(x, d)
+        assert not ok or np.abs(taken - d).max() < 1e-2
+
+
+def test_coordinates_need_no_rebuild_right_after_building():
+    symbols = ["H", "C", "C", "C", "C", "H"]
+    for at in range(4):
+        for bend in (5.0, 10.0, 20.0):
+            x = _c4h2(bend, at)
+            for kind in ("tric", "dlc"):
+                coords = make_coordinates(kind, symbols, x, [], True)
+                if isinstance(coords, InternalCoordinates):
+                    assert not coords.needs_rebuild(x), (kind, at, bend)
+
+
+def test_prfo_climbs_with_a_tiny_gradient_along_the_mode():
+    from qcopt.steps import rfo_step
+
+    for g_mode in (1e-12, 1e-10, 1e-8):
+        step = rfo_step(
+            np.array([0.1, 0.5, 0.7]),
+            np.eye(3),
+            np.array([g_mode, 1e-3, 1e-3]),
+            0.2,
+            mode=0,
+        )
+        assert abs(step.dx[0]) == pytest.approx(0.2, rel=1e-3)
+
+
+def test_lqa_steps_have_the_requested_arc_length():
+    from qcopt.algorithms import _lqa_step
+
+    step = _lqa_step(np.array([-0.05, 0.3]), np.array([1e-5, 1e-5]), 0.3)
+    assert np.linalg.norm(step) == pytest.approx(0.3, rel=1e-3)
+    end = _lqa_step(np.array([0.01, 0.5]), np.array([2e-3, 2e-3]), 0.3)
+    assert np.linalg.norm(end) == pytest.approx(0.2, rel=1e-3)  # the path's end
+
+
+def test_bofill_meets_the_secant_condition_on_tiny_steps():
+    from qcopt.hessians import bofill
+
+    rng = np.random.default_rng(0)
+    a = rng.normal(size=(6, 6))
+    true = a + a.T
+    b = rng.normal(size=(6, 6))
+    h = true + 1e-3 * (b + b.T)  # a nearly right Hessian: r.s is tiny
+    for size in (1e-4, 1e-6):
+        s = rng.normal(size=6)
+        s *= size / np.linalg.norm(s)
+        y = true @ s
+        assert np.linalg.norm(bofill(h, s, y) @ s - y) < 1e-6 * np.linalg.norm(y)
+
+
+def test_degenerate_torsions_are_not_built():
+    x = np.array(
+        [  # HC4H, slightly bent; its torsion 0-1-4-5 has a 177 degree angle
+            [0.1184293896, 0.0518202649, -0.0691388191],
+            [-0.0497054628, -0.0678762621, 1.9527073886],
+            [0.0046758639, -0.4437923246, 4.2800432079],
+            [-0.02491774, -0.8025865723, 6.773194157],
+            [0.0226992628, -1.2659818831, 8.8400672525],
+            [-0.0218614617, -1.564193342, 11.0505842694],
+        ]
+    )
+    for kind in ("tric", "dlc"):
+        coords = make_coordinates(kind, ["H", "C", "C", "C", "C", "H"], x, [], True)
+        if isinstance(coords, InternalCoordinates):  # else Cartesians: also fine
+            assert not coords.needs_rebuild(x), kind

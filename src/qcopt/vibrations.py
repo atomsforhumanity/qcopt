@@ -63,6 +63,8 @@ def frequencies(
     h = np.asarray(hessian, dtype=float).reshape(3 * n, 3 * n)[np.ix_(dof, dof)]
     hm = h * w[:, None] * w[None, :]
     hm = 0.5 * (hm + hm.T)
+    # One atom is not projected: in a model potential its motion is real (and an
+    # isolated atom's three frequencies are zero).
     if project and len(frozen) == 0 and n > 1:
         basis = internal_basis(x, m)
         vals, vecs = np.linalg.eigh(basis.T @ hm @ basis)

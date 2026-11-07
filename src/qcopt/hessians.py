@@ -148,7 +148,7 @@ def sr1(h: Array, s: Array, y: Array) -> Array:
     """Symmetric rank-one (Murtagh-Sargent) update, skipped when ill-conditioned."""
     r = y - h @ s
     rs = float(r @ s)
-    if abs(rs) < 1e-8 * np.linalg.norm(r) * np.linalg.norm(s) or abs(rs) < 1e-14:
+    if rs == 0.0 or abs(rs) < 1e-8 * np.linalg.norm(r) * np.linalg.norm(s):
         return h
     return h + np.outer(r, r) / rs
 
@@ -197,7 +197,7 @@ def ts_bfgs(h: Array, s: Array, y: Array) -> Array:
     abs_hs = vecs @ (np.abs(vals) * (vecs.T @ s))
     x = float(s @ y) * y + float(s @ abs_hs) * abs_hs
     xs = float(x @ s)
-    if abs(xs) < 1e-14:
+    if xs == 0.0 or abs(xs) < 1e-12 * np.linalg.norm(x) * np.linalg.norm(s):
         return psb(h, s, y)
     u = x / xs
     return h + np.outer(u, j) + np.outer(j, u) - float(j @ s) * np.outer(u, u)
