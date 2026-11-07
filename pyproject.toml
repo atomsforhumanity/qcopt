@@ -1,6 +1,6 @@
 [project]
 name = "qcopt"
-version = "0.2.1"
+version = "0.2.2"
 description = "Geometry optimization, transition-state searches, and IRCs that return qcdata results."
 readme = "README.md"
 authors = [{ name = "Colton Hicks", email = "github@coltonhicks.com" }]
@@ -31,6 +31,7 @@ Changelog = "https://github.com/atomsforhumanity/qcopt/blob/main/CHANGELOG.md"
 "Bug Tracker" = "https://github.com/atomsforhumanity/qcopt/issues"
 
 [project.optional-dependencies]
+axtb = ["axtb>=0.1.0"]
 qccompute = ["qccompute>=0.22.0", "qccodec>=0.21.0"]
 
 [project.entry-points."qccodec.codecs"]

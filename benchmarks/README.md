@@ -6,7 +6,7 @@ in-process, one thread per run). They need their own environment:
 ```sh
 cd benchmarks
 uv venv -p 3.12 .venv
-VIRTUAL_ENV=.venv uv pip install -e .. <axtb wheel> sella==2.6.0 ase==3.29.0 geometric==1.1.1 networkx
+VIRTUAL_ENV=.venv uv pip install -e .. axtb==0.1.0 sella==2.6.0 ase==3.29.0 geometric==1.1.1 networkx
 VIRTUAL_ENV=.venv uv pip install "optking @ git+https://github.com/psi-rking/optking.git@0.5.0"
 ```
 

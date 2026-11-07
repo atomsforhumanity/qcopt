@@ -63,7 +63,9 @@ class Counted:
 
     def gradient(self, pos_bohr: np.ndarray) -> tuple[float, np.ndarray]:
         t = time.perf_counter()
-        r = self.calc.singlepoint(np.asarray(pos_bohr, dtype=float).reshape(-1, 3))
+        r = self.calc.singlepoint(
+            np.asarray(pos_bohr, dtype=float).reshape(-1, 3), gradient=True
+        )
         self.t_grad += time.perf_counter() - t
         self.n_grad += 1
         return float(r["energy"]), np.asarray(r["gradient"], dtype=float).reshape(-1, 3)
