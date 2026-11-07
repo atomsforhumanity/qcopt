@@ -24,7 +24,12 @@ def main() -> None:
     p.add_argument("--xyz-glob", required=True)
     p.add_argument("--optimizers", nargs="+", default=["qcopt", "sella", "geometric"])
     p.add_argument("--jobs", type=int, default=16)
-    p.add_argument("--timeout", type=int, default=900)
+    p.add_argument(
+        "--timeout",
+        type=int,
+        default=900,
+        help="seconds per run; the run stops itself and keeps its counts",
+    )
     p.add_argument("--task", default="ts")
     p.add_argument("--method", default="gxtb-v2.0.1")
     p.add_argument("--accuracy", default="0.01", help="axtb SCF accuracy")
@@ -71,6 +76,8 @@ def main() -> None:
             a.accuracy,
             "--extra",
             extra,
+            "--time-limit",
+            str(a.timeout),
         ]
         if a.pairs:
             name = Path(f).parent.name
@@ -89,7 +96,8 @@ def main() -> None:
         try:
             subprocess.run(
                 cmd,
-                timeout=a.timeout,
+                # a backstop: the run stops itself at a.timeout
+                timeout=a.timeout + 600,
                 env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

@@ -17,6 +17,7 @@ for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
 
 import argparse  # noqa: E402
 import json  # noqa: E402
+import signal  # noqa: E402
 import sys  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
@@ -36,7 +37,7 @@ EV = float(c.HARTREE_TO_EV)
 
 
 class Counted:
-    """axtb with counts and timings of every gradient and Hessian."""
+    """axtb with counts and timings of every gradient, Hessian and energy-only call."""
 
     def __init__(
         self,
@@ -57,6 +58,8 @@ class Counted:
         self.n_hess = 0
         self.t_grad = 0.0
         self.t_hess = 0.0
+        self.n_energy = 0  # energies alone (OptKing's line searches ask for them)
+        self.t_energy = 0.0
 
     def gradient(self, pos_bohr: np.ndarray) -> tuple[float, np.ndarray]:
         t = time.perf_counter()
@@ -64,6 +67,15 @@ class Counted:
         self.t_grad += time.perf_counter() - t
         self.n_grad += 1
         return float(r["energy"]), np.asarray(r["gradient"], dtype=float).reshape(-1, 3)
+
+    def energy(self, pos_bohr: np.ndarray) -> float:
+        t = time.perf_counter()
+        r = self.calc.singlepoint(
+            np.asarray(pos_bohr, dtype=float).reshape(-1, 3), gradient=False
+        )
+        self.t_energy += time.perf_counter() - t
+        self.n_energy += 1
+        return float(r["energy"])
 
     def hessian(self, pos_bohr: np.ndarray) -> np.ndarray:
         t = time.perf_counter()
@@ -346,6 +358,9 @@ def run_optking(calc: Counted, sym, x0, task, gmax, maxiter, extra):
     class AxtbComputer(UserComputer):
         def _compute(self, driver):
             g = np.asarray(self.molecule["geometry"], dtype=float).reshape(-1, 3)
+            if driver == "energy":  # its line searches: the energy alone
+                self.external_energy = calc.energy(g)
+                return super()._compute(driver)
             e, grad = calc.gradient(g)
             self.external_energy = e
             self.external_gradient = grad.ravel()
@@ -383,6 +398,14 @@ def run_optking(calc: Counted, sym, x0, task, gmax, maxiter, extra):
     return ok, x, len(traj), err
 
 
+class TimeLimit(BaseException):
+    """Raised by the time-limit alarm (a BaseException: optimizers catch Exception)."""
+
+
+def _time_up(signum, frame):
+    raise TimeLimit
+
+
 RUNNERS = {
     "qcopt": run_qcopt,
     "sella": run_sella,
@@ -410,6 +433,13 @@ def main() -> None:
     )
     p.add_argument("--maxiter", type=int, default=1000)
     p.add_argument("--extra", default="{}", help="JSON of optimizer-specific options")
+    p.add_argument(
+        "--time-limit",
+        type=float,
+        default=0.0,
+        help="stop the optimizer after this many seconds (0: no limit); the run is "
+        "recorded as failed, with the gradients and Hessians it used",
+    )
     a = p.parse_args()
     extra = json.loads(a.extra)
     sym, x0 = read_xyz(a.xyz)
@@ -437,11 +467,16 @@ def main() -> None:
         import optking  # noqa: F401
     else:
         import geometric.optimize  # noqa: F401
+    if a.time_limit > 0:
+        signal.signal(signal.SIGALRM, _time_up)
+        signal.setitimer(signal.ITIMER_REAL, a.time_limit)
     t0 = time.perf_counter()
     try:
         conv, x, nsteps, err = RUNNERS[a.optimizer](
             calc, sym, x0, a.task, gmax, a.maxiter, extra
         )
+    except TimeLimit:
+        conv, x, nsteps, err = False, None, None, f"time limit ({a.time_limit:.0f} s)"
     except Exception as exc:
         conv, x, nsteps, err = (
             False,
@@ -450,6 +485,7 @@ def main() -> None:
             f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
         )
     wall = time.perf_counter() - t0
+    signal.setitimer(signal.ITIMER_REAL, 0)
     rec.update(
         converged=conv,
         steps=nsteps,
@@ -459,7 +495,9 @@ def main() -> None:
         n_hess=calc.n_hess,
         t_grad=calc.t_grad,
         t_hess=calc.t_hess,
-        t_optimizer=wall - calc.t_grad - calc.t_hess,
+        t_optimizer=wall - calc.t_grad - calc.t_hess - calc.t_energy,
+        n_energy=calc.n_energy,
+        t_energy=calc.t_energy,
     )
     if x is not None and a.task == "irc":
         rec.update(irc_check(a, sym, x))
@@ -467,17 +505,18 @@ def main() -> None:
         import qcopt
 
         check = Counted(a.method, sym, x, accuracy=a.accuracy)
-        e, g = check.gradient(x)
-        h = check.hessian(x)
-        f = qcopt.frequencies(h, sym, x)
-        rec.update(
-            energy=e,
-            gmax_final=float(np.sqrt((g * g).sum(1)).max()),
-            n_imaginary=f.n_imaginary(10.0),
-            lowest_cm=[float(v) for v in f.wavenumbers[:3]],
-            geometry=np.asarray(x).tolist(),
-            symbols=sym,
-        )
+        rec.update(geometry=np.asarray(x).tolist(), symbols=sym)
+        try:
+            e, g = check.gradient(x)
+            rec.update(energy=e, gmax_final=float(np.sqrt((g * g).sum(1)).max()))
+            h = check.hessian(x)
+            f = qcopt.frequencies(h, sym, x)
+            rec.update(
+                n_imaginary=f.n_imaginary(10.0),
+                lowest_cm=[float(v) for v in f.wavenumbers[:3]],
+            )
+        except Exception as exc:  # the result's structure cannot be checked
+            rec.update(check_error=f"{type(exc).__name__}: {exc}")
     json.dump(rec, open(a.out, "w"))
 
 

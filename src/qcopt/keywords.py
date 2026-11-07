@@ -185,9 +185,10 @@ class IRCKeywords(_Keywords):
             length. On 100 Reaction-QM IRCs at g-xTB (axtb's default SCF accuracy),
             GS2 at 0.3 reached the same minima as Sella in all 100 with a median of 375
             gradients (ends included) against LQA at 0.1's 528; LQA at 0.3 and GS2 at
-            0.5 each ended one in another minimum. At SCF accuracy 0.01, GS2 at 0.3
-            matched Sella's minima in 96 (the other 4 neighboring minima of the same
-            species) with a median of 356.5.
+            0.5 each ended one in another minimum. With qcopt 0.2.0 at SCF accuracy
+            0.01, GS2 at 0.3 matched Sella's minima in 94 (of the other 6, 4 ended in
+            neighboring minima of the same species) with a median of 349.5 gradients,
+            ends included; in 16 a branch reached ``max_steps``.
         max_steps: Most steps per branch. A branch that reaches it leaves the IRC
             unconverged (``success=False``, frames kept), unless ``minimize_ends``
             then converged its end.
