@@ -150,7 +150,7 @@ class InternalCoordinates:
     def jacobian_to_space(self, x: Array, jx: Array) -> Array:
         """Constraint Jacobian rows in the internal coordinates: ``J B^+``."""
         b = self.ic.b_matrix(x)
-        return np.asarray(jx, dtype=float) @ b.T @ np.linalg.inv(b @ b.T)
+        return np.asarray(jx, dtype=float) @ b.T @ np.linalg.pinv(b @ b.T)
 
     def step(self, x: Array, d: Array) -> tuple[Array, Array, bool]:
         """Back-transform an internal step; degenerate coordinates count as a failure."""
@@ -198,7 +198,11 @@ class InternalCoordinates:
     def rebuild(self, x: Array, h: Array) -> Array:
         """Rebuild at ``x``; returns the Hessian carried into the new coordinates."""
         hx = self.ic.to_cartesian_hessian(x, h)
-        self.ic = DelocalizedInternals(self.symbols, x, tric=self.tric)
+        try:
+            ic = DelocalizedInternals(self.symbols, x, tric=self.tric)
+        except np.linalg.LinAlgError as exc:
+            raise CoordinateError(f"rebuilding the coordinates failed: {exc}") from exc
+        self.ic = ic
         self.at(x)
         return self.ic.hessian(x, hx)
 
@@ -214,6 +218,6 @@ def make_coordinates(
     if kind in ("tric", "dlc") and not frozen and len(symbols) > 2:
         try:
             return InternalCoordinates(symbols, x, tric=kind == "tric")
-        except CoordinateError:
+        except (CoordinateError, np.linalg.LinAlgError):  # e.g. coincident atoms
             pass
     return CartesianCoordinates(len(symbols), frozen, atomic_trust)

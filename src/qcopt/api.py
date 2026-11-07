@@ -35,8 +35,9 @@ from qcdata import (
 from qcref import periodic_table as pt
 
 from . import algorithms
+from .constraints import ConstraintSet
 from .driver import Answer, TaskContext, drive
-from .evaluators import default_evaluator
+from .evaluators import default_evaluator, surface_keywords
 from .keywords import IRCKeywords, OptimizationKeywords
 
 PROGRAM = "qcopt"
@@ -60,13 +61,14 @@ def _subprogram(inp: ProgramInput, calctype: CalcType) -> ProgramSpec | None:
 def _separate(grad: ProgramSpec, hess: ProgramSpec | None) -> bool:
     """Whether Hessians come from another calculation than the gradients.
 
-    Another program, method or keywords (such as a solvent or an SCF accuracy) is
-    another energy surface: its energies and gradients never enter the frames.
+    Another program, method or keywords that define the surface (such as a solvent
+    or an SCF accuracy, but not threads or how the Hessian is computed) is another
+    energy surface: its energies and gradients never enter the frames.
     """
     return hess is not None and (
         hess.program != grad.program
         or hess.model != grad.model
-        or dict(hess.keywords) != dict(grad.keywords)
+        or surface_keywords(hess) != surface_keywords(grad)
     )
 
 
@@ -96,6 +98,9 @@ def _prepare(inp: ProgramInput) -> tuple[TaskContext, Any]:
             "with a Hessian subprogram, use 'exact' (or leave it 'auto')"
         )
     s = inp.require_structure()
+    if isinstance(kw, OptimizationKeywords) and kw.constraints is not None:
+        if kw.constraints.size:  # checked here, before anything is computed
+            ConstraintSet(kw.constraints, s.geometry, kw.frozen_atoms)
     ctx = TaskContext(
         symbols=list(s.symbols),
         charge=s.charge,
@@ -112,8 +117,11 @@ def _prepare(inp: ProgramInput) -> tuple[TaskContext, Any]:
 def _algorithm(inp: ProgramInput, ctx: TaskContext, kw: Any) -> algorithms.Algorithm:
     s = inp.require_structure()
     has_h = ctx.hessian_spec is not None
+    sep = ctx.separate_hessian
     if inp.calctype == CalcType.irc:
-        return algorithms.irc(s.geometry, s.symbols, kw, has_hessian_program=has_h)
+        return algorithms.irc(
+            s.geometry, s.symbols, kw, has_hessian_program=has_h, separate_hessian=sep
+        )
     numbers = [int(getattr(pt, sym.capitalize()).number) for sym in s.symbols]
     return algorithms.optimize(
         s.geometry,
@@ -122,6 +130,7 @@ def _algorithm(inp: ProgramInput, ctx: TaskContext, kw: Any) -> algorithms.Algor
         kw,
         transition_state=inp.calctype == CalcType.transition_state,
         has_hessian_program=has_h,
+        separate_hessian=sep,
     )
 
 

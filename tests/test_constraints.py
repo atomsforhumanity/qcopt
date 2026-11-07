@@ -70,6 +70,5 @@ def test_keep_starting_angle():
 
 
 def test_bad_constraint_is_an_error():
-    out = qcopt.minimize(BUTANE, GFN2, constraints={"distance": [[0, 0]]})
-    assert not out.success
-    assert "bad atoms" in out.traceback
+    with pytest.raises(ValueError, match="bad atoms"):  # before anything is computed
+        qcopt.minimize(BUTANE, GFN2, constraints={"distance": [[0, 0]]})

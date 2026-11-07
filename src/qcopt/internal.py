@@ -655,7 +655,7 @@ class DelocalizedInternals:
         """
         x = np.asarray(x, dtype=float).reshape(-1, 3)
         b = self.b_matrix(x)
-        g_inv = np.linalg.inv(b @ b.T)
+        g_inv = np.linalg.pinv(b @ b.T)  # degenerate coordinates are rebuilt later
         b_pinv = b.T @ g_inv  # (3N, n)
         h = np.asarray(hessian, dtype=float)
         if gradient is not None:

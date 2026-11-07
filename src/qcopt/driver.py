@@ -50,9 +50,11 @@ class Answer:
             ``ProgramOutput`` or the program's raw result), used to build frames.
         program: The program that computed it.
         program_version: Its version.
-        n_gradients: Gradient calculations this answer took (finite differences;
-            for a Hessian from a separate program, 1 when the gradient program's
-            gradient was computed for it and 0 when it was reused).
+        n_gradients: Gradient calculations this answer took, as the driver counts
+            them for the algorithm (finite differences: all displaced gradients; a
+            Hessian paired with a gradient: 1 when that gradient was computed for it,
+            0 when it was reused; 0 when the evaluator itself failed).
+        n_hessians: Hessian calculations it took (counted the same way).
         hessian_answer: For a Hessian from a separate program (a different program
             or method than the gradients), that program's own answer; the energy,
             gradient and output above are then the gradient program's.
@@ -68,6 +70,7 @@ class Answer:
     program: str | None = None
     program_version: str | None = None
     n_gradients: int = 1
+    n_hessians: int = 0
     hessian_answer: Answer | None = None
 
 
@@ -178,20 +181,22 @@ def _fd_hessian(
     )
 
 
-def _finite(request: Request, answer: Answer) -> Answer:
-    """A successful answer with NaN or infinite values becomes a failed one."""
+def _finite(request: Request, answer: Answer, hessian_only: bool) -> Answer:
+    """A successful answer that is incomplete or not finite becomes a failed one.
+
+    ``hessian_only``: the Hessian part of a pair, whose energy and gradient come from
+    the gradient program; every other answer needs a finite energy and gradient.
+    """
     if not answer.success:
         return answer
-    parts: list[tuple[str, Any]] = [("Hessian", answer.hessian)]
-    if request.kind == "gradient":
-        parts = [("energy", answer.energy), ("gradient", answer.gradient), *parts]
-    else:
-        parts = [("gradient", answer.gradient), *parts]
-    for what, value in parts:
+    needed: list[tuple[str, Any]] = []
+    if not hessian_only:
+        needed += [("energy", answer.energy), ("gradient", answer.gradient)]
+    if request.kind == "hessian":
+        needed.append(("Hessian", answer.hessian))
+    for what, value in needed:
         if value is None:
-            if what == "gradient" and request.kind == "gradient":
-                return replace(answer, success=False, error="no gradient computed")
-            continue
+            return replace(answer, success=False, error=f"no {what} computed")
         if not np.all(np.isfinite(np.asarray(value, dtype=float))):
             return replace(answer, success=False, error=f"non-finite {what}")
     return answer
@@ -276,6 +281,7 @@ def drive(
         requests: list[Request] = []
         plans: dict[int, list[tuple[str, int, int, Ask]]] = {}
         reused: dict[tuple[int, int], Answer] = {}
+        hessian_only: set[int] = set()  # request indices of Hessian halves of pairs
         for i, asks in pending.items():
             ctx = contexts[i]
             plan = []
@@ -291,6 +297,7 @@ def drive(
                         requests.append(Request(i, "gradient", x, ctx))
                     else:
                         reused[(i, start)] = known
+                    hessian_only.add(len(requests))
                     requests.append(Request(i, "hessian", x, ctx))
                     plan.append(("split", start, len(requests), ask))
                 elif ask.kind == "hessian" and not direct[i]:
@@ -302,6 +309,7 @@ def drive(
                     requests.append(Request(i, ask.kind, x, ctx))
                     plan.append(("direct", start, len(requests), ask))
             plans[i] = plan
+        crashed = False
         try:
             answers = list(evaluator(requests)) if requests else []
             if len(answers) != len(requests):
@@ -309,12 +317,16 @@ def drive(
                     f"{len(answers)} answers for {len(requests)} requests"
                 )
         except Exception as exc:  # noqa: BLE001 - every request of the round failed
+            crashed = True
             error = f"evaluator failed: {type(exc).__name__}: {exc}"
             answers = [
                 Answer(positions=r.positions, success=False, error=error)
                 for r in requests
             ]
-        answers = [_finite(r, a) for r, a in zip(requests, answers, strict=True)]
+        answers = [
+            _finite(r, a, k in hessian_only)
+            for k, (r, a) in enumerate(zip(requests, answers, strict=True))
+        ]
         nxt: dict[int, list[Ask]] = {}
         for i, plan in plans.items():
             replies = []
@@ -324,13 +336,16 @@ def drive(
                     reply = answers[a]
                     if ask.kind == "gradient" and reply.success:
                         _remember(recent[i], x, reply)
+                    hess = int(ask.kind == "hessian")
+                    reply = replace(reply, n_gradients=1 - hess, n_hessians=hess)
                     replies.append(reply)
                 elif how == "split":
                     fresh = b - a == 2
                     grad = answers[a] if fresh else reused[(i, a)]
                     if fresh and grad.success:
                         _remember(recent[i], x, grad)
-                    replies.append(_combine(grad, answers[b - 1], x, fresh))
+                    reply = _combine(grad, answers[b - 1], x, fresh)
+                    replies.append(replace(reply, n_gradients=int(fresh), n_hessians=1))
                 elif how == "unsupported":
                     replies.append(
                         Answer(
@@ -345,9 +360,12 @@ def drive(
                     )
                 else:
                     center = answers[a]
-                    replies.append(
-                        _fd_hessian(center, answers[a + 1 : b], x, contexts[i].fd_step)
+                    reply = _fd_hessian(
+                        center, answers[a + 1 : b], x, contexts[i].fd_step
                     )
+                    replies.append(replace(reply, n_gradients=b - a, n_hessians=1))
+            if crashed:  # nothing was computed
+                replies = [replace(r, n_gradients=0, n_hessians=0) for r in replies]
             try:
                 nxt[i] = algorithms[i].send(replies)
             except StopIteration as stop:

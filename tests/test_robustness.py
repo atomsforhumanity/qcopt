@@ -470,10 +470,9 @@ def test_bad_constraints_are_reported():
         ),
         ({"constraints": {"angle": [[0, 1, 2, 180.0]]}}, "constrain distances instead"),
     ]
-    for keywords, message in cases:
-        out = qcopt.minimize(s, {"program": "f"}, evaluator=ev, **keywords)
-        assert not out.success
-        assert message in out.traceback
+    for keywords, message in cases:  # rejected before anything is computed
+        with pytest.raises(ValueError, match=message):
+            qcopt.minimize(s, {"program": "f"}, evaluator=ev, **keywords)
 
 
 def test_cartesian_fallback_keeps_the_hessian(monkeypatch):
@@ -530,3 +529,258 @@ def test_a_reused_axtb_evaluator_uses_each_runs_method():
     )
     assert not xtb.success
     assert "computes axtb specs" in xtb.traceback
+
+
+# ------------------------------------------------- round 2 (review of the fixes)
+
+
+def test_ts_check_also_runs_on_the_last_iteration():
+    x, y = MB_MINIMA[1]
+    out = qcopt.find_ts(
+        _atom(x + 0.01, y), MB, hessian=True, evaluator=_ev(), maxiter=2
+    )
+    assert not out.success
+
+
+def _two_shoulders(c=0.02, k=0.05):
+    from numpy.polynomial import polynomial as P
+
+    g = c * P.polyfromroots([0, 1, 1, 2, 2, 3])  # TS at 0, shoulders 1 and 2, min 3
+    e, h = P.polyint(g), P.polyder(g)
+
+    def fn(p):
+        x, yy, zz = (float(v) for v in p[0])
+        grad = np.array([[P.polyval(x, g), 2 * k * yy, 2 * k * zz]])
+        return P.polyval(x, e) + k * (yy * yy + zz * zz), grad
+
+    def hess(p):
+        return np.diag([P.polyval(float(p[0, 0]), h), 2 * k, 2 * k])
+
+    return fn, hess
+
+
+def test_irc_end_recheck_keeps_going_down_a_shoulder():
+    # At step 0.26 the second exact end check comes on the shoulder at 2 while the
+    # path still goes down (other steps end on the shoulder at 1, where the gradient
+    # vanishes and the curvature is zero: an IRC cannot tell that from a minimum).
+    fn, hess = _two_shoulders()
+    for ds in (0.26,):
+        out = qcopt.irc(
+            _atom(0.0),
+            {"program": "f"},
+            hessian=True,
+            evaluator=qcopt.FunctionEvaluator(fn, hess),
+            direction="forward",
+            step_size=ds,
+            update="bfgs",
+        )
+        assert out.success, out.traceback
+        assert _irc_frames_x(out)[-1] > 2.8  # the minimum at 3, not the shoulder at 2
+
+
+def test_a_nan_energy_with_a_hessian_fails():
+    class NaNAtHessians(qcopt.FunctionEvaluator):
+        def __call__(self, requests):
+            out = super().__call__(requests)
+            for r, a in zip(requests, out, strict=True):
+                if r.kind == "hessian":
+                    a.energy = float("nan")
+            return out
+
+    ev = NaNAtHessians(muller_brown, muller_brown_hessian)
+    out = qcopt.find_ts(_mb((-0.8, 0.6)), MB, hessian=True, evaluator=ev)
+    assert not out.success
+    assert "non-finite energy" in out.traceback
+
+
+def _oco(angle):
+    t = np.radians(angle / 2)
+    return np.array(
+        [
+            [-2.2 * np.sin(t), 2.2 * np.cos(t), 0],
+            [0, 0, 0],
+            [2.2 * np.sin(t), 2.2 * np.cos(t), 0],
+        ]
+    )
+
+
+def test_bent_molecules_keep_three_rotations():
+    for angle, rigid in ((180.0, 5), (179.9, 5), (179.0, 6), (176.0, 6), (120.0, 6)):
+        assert rigid_basis(_oco(angle)).shape[1] == rigid, angle
+    for angle in (176.0, 174.5, 173.0):  # DLC builds with ordinary bends here
+        coords = make_coordinates("dlc", ["O", "C", "O"], _oco(angle), [], True)
+        assert coords.name == "dlc", angle
+
+
+def test_hessian_keywords_do_not_make_a_separate_program():
+    from qcdata import ProgramSpec
+
+    from qcopt.api import _separate
+
+    def spec(calctype, **kw):
+        return ProgramSpec(
+            program="axtb", calctype=calctype, model={"method": "gfn2"}, keywords=kw
+        )
+
+    grad = spec("gradient", accuracy=0.01)
+    assert not _separate(
+        grad, spec("hessian", accuracy=0.01, hessian_accuracy=1e-4, threads=4)
+    )
+    assert _separate(grad, spec("hessian", accuracy=0.01, alpb="water"))
+
+
+def test_routing_without_contexts_pairs_hessians_conservatively():
+    from qcopt.driver import TaskContext
+    from qcopt.evaluators import RoutingEvaluator
+
+    route = RoutingEvaluator(
+        [qcopt.FunctionEvaluator(muller_brown), qcopt.ComputeEvaluator(lambda i: [])],
+        [0],
+    )
+    ctx = TaskContext(symbols=["H"])
+    assert route.hessian_includes_gradient(ctx) is False
+
+
+def test_counts_survive_an_exception(monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("frequencies broke")
+
+    monkeypatch.setattr(algorithms, "frequencies", broken)
+    out = qcopt.minimize(
+        _atom(0.3, 0.2), MB, hessian=True, evaluator=_ev(), frequencies=True
+    )
+    assert out.results.extras["n_gradients"] > 0
+    assert out.results.extras["n_hessians"] >= 1
+
+
+# --------------------------------------- round 2 (end-to-end scenario matrix)
+
+
+def _saddle_eigen():
+    h = muller_brown_hessian(np.array([[*MB_SADDLES[0], 0.0]]))[:2, :2]
+    return np.linalg.eigh(h)
+
+
+class _LowLevel(qcopt.FunctionEvaluator):
+    """Müller-Brown gradients; Hessians from another 'program' given as a function."""
+
+    def __init__(self, low_hessian):
+        super().__init__(muller_brown, low_hessian)
+
+    def supports_hessian(self, context):
+        return True
+
+
+def test_lower_level_frequencies_do_not_decide_a_ts_search():
+    def low(p):  # Müller-Brown's, with an extra negative mode along z
+        h = muller_brown_hessian(p)
+        h[2, 2] = -1e-4
+        return h
+
+    out = qcopt.find_ts(
+        _mb((-0.7, 0.6)),
+        MB,
+        hessian={"program": "low"},
+        evaluator=_LowLevel(low),
+        trust=0.1,
+        frequencies=True,
+    )
+    assert out.success, out.traceback
+    assert out.results.extras["n_imaginary"] == 2  # reported, labelled
+    assert out.results.extras["frequencies"]["program"] == "low"
+
+
+def test_irc_that_cannot_descend_fails():
+    vals, vecs = _saddle_eigen()
+
+    def swapped(p):  # the negative mode where the path goes up
+        h = np.zeros((3, 3))
+        h[:2, :2] = vals[0] * np.outer(vecs[:, 1], vecs[:, 1]) + vals[1] * np.outer(
+            vecs[:, 0], vecs[:, 0]
+        )
+        h[2, 2] = 1.0
+        return h
+
+    out = qcopt.irc(
+        _mb(MB_SADDLES[0]), MB, hessian={"program": "low"}, evaluator=_LowLevel(swapped)
+    )
+    assert not out.success
+    ts = out.results.frames[out.results.ts_index].results.energy
+    assert all(f.results.energy <= ts + 1e-12 for f in out.results.frames)
+
+
+def test_minimization_that_ends_higher_than_it_started_fails():
+    calls = {"n": 0}
+
+    def changes_state(x):  # the program lands on another solution after 3 calls
+        calls["n"] += 1
+        e, g = muller_brown(x)
+        return (e + (0.01 if calls["n"] > 3 else 0.0)), g
+
+    out = qcopt.minimize(
+        _atom(-0.5, 1.4), MB, evaluator=qcopt.FunctionEvaluator(changes_state)
+    )
+    assert not out.success
+    assert "higher than it started" in out.traceback
+
+
+def test_trust_starts_within_its_bounds():
+    out = qcopt.minimize(
+        _atom(0.3, 0.2),
+        MB,
+        evaluator=_ev(False),
+        coordinates="cartesian",
+        trust=0.5,
+        trust_max=0.05,
+    )
+    assert out.results.extras["log"][0]["trust"] == pytest.approx(0.05)
+    with pytest.raises(ValueError, match="trust_min"):
+        qcopt.minimize(
+            _atom(0.3, 0.2), MB, evaluator=_ev(False), trust_min=0.5, trust_max=0.1
+        )
+
+
+def test_counts_are_the_calculations_run():
+    class Breaks(qcopt.FunctionEvaluator):
+        computed = 0
+        calls = 0
+
+        def __call__(self, requests):
+            Breaks.calls += 1
+            if Breaks.calls >= 4:
+                raise RuntimeError("down")
+            Breaks.computed += len(requests)
+            return super().__call__(requests)
+
+    out = qcopt.minimize(_atom(0.3, 0.2), MB, evaluator=Breaks(muller_brown))
+    assert not out.success
+    assert out.results.extras["n_gradients"] == Breaks.computed == 3
+
+
+def test_minimized_ends_are_not_duplicated():
+    # the branch ends after an exact end check; the end minimization takes no step
+    out = qcopt.irc(
+        _atom(0.0),
+        {"program": "f"},
+        hessian=True,
+        evaluator=qcopt.FunctionEvaluator(shoulder, shoulder_hessian),
+        direction="forward",  # the surface has no minimum on the other side
+        update="bfgs",
+        minimize_ends=True,
+        end_convergence={"gmax": 1e-2},
+    )
+    assert out.success, out.traceback
+    x = [f.structure.geometry.tobytes() for f in out.results.frames]
+    assert all(a != b for a, b in zip(x, x[1:], strict=False))
+
+
+def test_coincident_atoms_fall_back_to_cartesians():
+    x = np.array([[0.0, 0, 0], [0.0, 0, 0], [1.8, 0.2, 0.0]])
+    coords = make_coordinates("tric", ["O", "H", "H"], x, [], True)
+    assert coords.name == "cartesian"
+
+
+def test_an_irc_that_cannot_start_points_at_its_frame():
+    out = qcopt.irc(_mb(MB_MINIMA[1]), MB, hessian=True, evaluator=_ev())
+    assert not out.success
+    assert out.results.ts_index == 0

@@ -94,7 +94,8 @@ class OptimizationKeywords(_Keywords):
             minus this (Hartree/bohr^2, or per internal unit).
         update: The quasi-Newton update between exact Hessians; ``auto``: BFGS for
             minima, TS-BFGS for transition states.
-        trust: Starting trust radius. In Cartesian coordinates, the largest atomic
+        trust: Starting trust radius (kept between ``trust_min`` and ``trust_max``).
+            In Cartesian coordinates, the largest atomic
             displacement of a step (bohr), or with ``trust_type="norm"`` the norm
             of the whole step. In internal coordinates (``tric``, ``dlc``), the norm
             of the step in those coordinates (bohr and radians, rotations scaled to
@@ -154,6 +155,12 @@ class OptimizationKeywords(_Keywords):
     fd_step: float = Field(default=0.005, gt=0)
 
     @model_validator(mode="after")
+    def _trust_range(self) -> OptimizationKeywords:
+        if self.trust_min > self.trust_max:
+            raise ValueError("trust_min is larger than trust_max")
+        return self
+
+    @model_validator(mode="after")
     def _mode_in_cartesians(self) -> OptimizationKeywords:
         if self.mode is not None and self.coordinates != "cartesian":
             raise ValueError(
@@ -195,7 +202,9 @@ class IRCKeywords(_Keywords):
             (Hartree/bohr) with positive curvature. When the updated Hessian shows
             negative curvature there, the exact Hessian decides (at most twice per
             branch); without a Hessian program, a last step lowering the energy by
-            less than ``flat_energy`` also ends it.
+            less than ``flat_energy`` also ends it. A branch can end on a flat
+            shoulder of the path, where the gradient vanishes without a minimum;
+            ``minimize_ends`` (or minimizing the ends afterwards) then finds it.
         flat_energy: Energy change (Hartree) below which a step counts as flat.
         frozen_atoms: Atoms that do not move.
         fd_step: Step (bohr) of finite-difference Hessians.

@@ -30,10 +30,12 @@ def masses(symbols: Sequence[str]) -> Array:
 
 
 # A structure is linear when its smallest principal moment of inertia is below this
-# fraction of its largest (the rule axtb's vibrational analysis uses). A strict
-# numerical test would count a molecule 1e-5 bohr off linear as bent, and its third
-# "rotation" would then be one of the two degenerate bends.
-LINEAR_MOMENT_RATIO = 1e-3
+# fraction of its largest: within about 0.2 degrees of linear (the ratio is about the
+# square of the deviation in radians). A purely numerical test counts a molecule 1e-5
+# bohr off linear as bent, and its third "rotation" is then one of the two degenerate
+# bends; a looser one (1e-3, about 6 degrees) counts truly bent molecules as linear,
+# and their rotation about the long axis then shows up as a vibration.
+LINEAR_MOMENT_RATIO = 1e-6
 
 
 def _inertia(x: Array, w: Array) -> Array:
