@@ -880,3 +880,49 @@ def test_degenerate_torsions_are_not_built():
         coords = make_coordinates(kind, ["H", "C", "C", "C", "C", "H"], x, [], True)
         if isinstance(coords, InternalCoordinates):  # else Cartesians: also fine
             assert not coords.needs_rebuild(x), kind
+
+
+# ------------------------------------------------ round 3 (matrix rerun findings)
+
+
+def test_a_failed_finite_difference_hessian_is_no_hessian():
+    calls = {"n": 0}
+
+    def fails_once(x):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("one displaced gradient failed")
+        return muller_brown(x)
+
+    out = qcopt.find_ts(
+        _mb((-0.7, 0.6)), MB, evaluator=qcopt.FunctionEvaluator(fails_once)
+    )
+    assert not out.success
+    assert out.results.extras["n_hessians"] == 0
+    assert out.results.extras["n_gradients"] == calls["n"]
+
+
+def test_minimization_at_a_saddle_with_its_exact_hessian_fails():
+    out = qcopt.minimize(_mb(MB_SADDLES[1]), MB, hessian=True, evaluator=_ev())
+    assert not out.success
+    assert "saddle point" in out.traceback
+
+
+def test_ts_search_checks_a_strong_second_negative_mode():
+    def fn(p):  # a second-order saddle at the origin; y is symmetric, so never sampled
+        x, y, z = (float(v) for v in p[0])
+        return -0.1 * x * x - 0.05 * y * y + 0.2 * z * z, np.array(
+            [[-0.2 * x, -0.1 * y, 0.4 * z]]
+        )
+
+    def hess(p):
+        return np.diag([-0.2, -0.1, 0.4])
+
+    out = qcopt.find_ts(
+        _atom(0.05),
+        {"program": "f"},
+        hessian=True,
+        evaluator=qcopt.FunctionEvaluator(fn, hess),
+    )
+    assert not out.success
+    assert "2 directions of negative curvature" in out.traceback

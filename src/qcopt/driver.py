@@ -363,7 +363,9 @@ def drive(
                     reply = _fd_hessian(
                         center, answers[a + 1 : b], x, contexts[i].fd_step
                     )
-                    replies.append(replace(reply, n_gradients=b - a, n_hessians=1))
+                    replies.append(
+                        replace(reply, n_gradients=b - a, n_hessians=int(reply.success))
+                    )
             if crashed:  # nothing was computed
                 replies = [replace(r, n_gradients=0, n_hessians=0) for r in replies]
             try:

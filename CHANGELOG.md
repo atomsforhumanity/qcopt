@@ -10,9 +10,10 @@ All notable changes to this project are documented here. The format follows
 
 - A transition-state search that ends where the Hessian has no negative curvature
   (one started at a minimum, for example), or several in an exact Hessian or in the
-  frequencies, fails instead of reporting success. So does a minimization whose
-  frequencies show a saddle point, or that ends higher than it started (a program that
-  changed SCF state, for example).
+  frequencies, fails instead of reporting success; an updated Hessian with a strong
+  second negative direction is checked with the exact one. So does a minimization whose
+  frequencies (or the exact Hessian it ends with) show a saddle point, or that ends
+  higher than it started (a program that changed SCF state, for example).
 - An IRC whose branch runs out of steps (`max_steps`), does not go downhill from the
   transition state, or stops with its gradient far above `gmax`, or whose end
   minimizations do not converge, fails (`success=False`, frames kept) instead of
@@ -23,7 +24,8 @@ All notable changes to this project are documented here. The format follows
   `hessian_every`) no longer ends the branch; a point already below `gmax` is no longer
   rejected because its gradient points along the step; the first step is checked for
   going downhill too; Gonzalez-Schlegel steps no longer move sideways along a mode that
-  carries no gradient; `minimize_ends` no longer repeats an end frame.
+  carries no gradient; `minimize_ends` no longer repeats an end frame; a branch whose
+  steps shrink to nothing ends ("stalled") instead of crawling to `max_steps`.
 - An exception inside an optimization or IRC, a crashing evaluator, and missing, NaN or
   infinite energies, gradients or Hessians fail the calculation and keep its frames,
   instead of losing every frame or (for NaN) converging.

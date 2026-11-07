@@ -199,11 +199,15 @@ def _optimize(
         else None
     )
 
-    def _n_negative(hh: Array) -> int:
-        """Directions of negative curvature among the free ones."""
+    def _negative(hh: Array) -> Array:
+        """The negative curvatures among the free directions, lowest first."""
         vals_ = _decompose(hh)[0]
         n_free_ = len(vals_) - coords.n_locked - (cons.size if cons else 0)
-        return int((vals_[:n_free_] < -kw.lost_curvature).sum())
+        free = vals_[:n_free_]
+        return free[free < -kw.lost_curvature]
+
+    def _n_negative(hh: Array) -> int:
+        return len(_negative(hh))
 
     def _free(gradient: Any, xx: Array) -> Array:
         """Cartesian gradient without constraint forces or rigid motion."""
@@ -313,12 +317,17 @@ def _optimize(
                 converged = True
                 if kw.frequencies and own:
                     break  # the final frequencies decide (below)
-                # An updated Hessian often shows a spurious second negative direction
-                # (11 of 100 g-xTB searches, all positive in the exact Hessian), so
-                # only an exact one fails a search for having several; one with no
-                # negative direction (a minimum) is checked with the exact Hessian.
-                n_neg = _n_negative(h)
-                if n_neg == 0 and can_recompute and not h_exact:
+                # An updated Hessian often shows a weak spurious second negative
+                # direction (11 of 100 g-xTB searches, at most 0.12 of the first, all
+                # positive in the exact Hessian), so only an exact Hessian fails a
+                # search for having several. None, or a second one at least a quarter
+                # as strong as the first, is checked with the exact Hessian.
+                neg = _negative(h)
+                n_neg = len(neg)
+                doubtful = n_neg == 0 or (
+                    n_neg > 1 and neg[1] < SECOND_NEGATIVE_RATIO * neg[0]
+                )
+                if doubtful and can_recompute and not h_exact:
                     (ha,) = count((yield [Ask("hessian", x)]))
                     if not ha.success:
                         error = (
@@ -342,6 +351,11 @@ def _optimize(
                 break
             if kw.escape_saddles == 0 or cons is not None:
                 converged = True
+                if h_exact and cons is None and _n_negative(h):
+                    error = (
+                        "stopped at a saddle point (negative curvature in the exact "
+                        "Hessian); escape_saddles steps off saddle points"
+                    )
                 break
             # A minimization can stop on a saddle point, where the forces vanish too.
             (ha,) = count((yield [Ask("hessian", x)]))
@@ -577,11 +591,16 @@ def _with_hessian(answer: Answer, hessian: Array) -> Answer:
     )
 
 
+# A transition-state search whose updated Hessian ends with a second negative curvature
+# at least this fraction of the first checks it with the exact Hessian.
+SECOND_NEGATIVE_RATIO = 0.25
+
 # -------------------------------------------------------------------------- IRC
 
-# A branch whose steps keep passing the valley floor ends there when its largest
-# atomic gradient is below this multiple of ``gmax`` (4 x 5e-4 Hartree/bohr is about
-# 0.1 eV/Angstrom, Sella's IRC criterion).
+# A branch whose steps keep passing the valley floor ("energy rose"), or whose steps
+# have shrunk to nothing ("stalled", 3 in a row below 1e-3 of the step size), ends
+# there when its largest atomic gradient is below this multiple of ``gmax`` (4 x 5e-4
+# Hartree/bohr is about 0.1 eV/Angstrom, Sella's IRC criterion).
 ENERGY_ROSE_GMAX = 4.0
 
 
@@ -734,6 +753,7 @@ class _Branch:
     last_de: float = float("inf")
     gmax: float = float("inf")
     sign: float = 1.0
+    tiny_steps: int = 0
 
 
 def irc(
@@ -780,6 +800,7 @@ def _irc(
     count = progress.count = _Counter()
     n = len(symbols)
     m = masses(symbols)
+    m3 = np.repeat(m, 3)
     x0 = np.asarray(positions, dtype=float).reshape(n, 3)
     space = CartesianSpace(n, frozen=kw.frozen_atoms, masses=m)
     (ts,) = count((yield [Ask("hessian", x0)]))
@@ -967,8 +988,13 @@ def _irc(
             b.frames.append(ans)
             de_last = abs(float(ans.energy) - float(b.prev.energy))
             b.last_de = de_last
+            step_mw = float(np.sqrt((m3 * dx * dx).sum()))
+            b.tiny_steps = b.tiny_steps + 1 if step_mw < 1e-3 * kw.step_size else 0
             b.x, b.prev = np.asarray(ans.positions, dtype=float).reshape(n, 3), ans
             if end_test(b, g_new, de_last, ans.hessian is not None):
+                continue
+            if b.tiny_steps >= 3:  # the model sees no way down: the path ends here
+                b.done, b.reason = True, "stalled"
                 continue
             b.ds = min(kw.step_size, 2.0 * b.ds)
             b.next = next_point(b)
@@ -1026,7 +1052,8 @@ def _irc(
         # path has reached the bottom along its direction; it ends there if its
         # gradient is close to the end criterion (within ENERGY_ROSE_GMAX of gmax).
         ended = (b.reason or "").startswith("converged") or (
-            b.reason == "energy rose" and b.gmax < ENERGY_ROSE_GMAX * kw.gmax
+            b.reason in ("energy rose", "stalled")
+            and b.gmax < ENERGY_ROSE_GMAX * kw.gmax
         )
         end = end_info.get(b.name)
         if kw.minimize_ends and end is not None and not end["converged"]:
@@ -1037,8 +1064,8 @@ def _irc(
             )
         elif not ended and not (kw.minimize_ends and end is not None):
             why = b.reason
-            if b.reason == "energy rose":
-                why = f"energy rose with the gradient at {b.gmax:.1e} Hartree/bohr"
+            if b.reason in ("energy rose", "stalled"):
+                why = f"{b.reason} with the gradient at {b.gmax:.1e} Hartree/bohr"
             unfinished.append(f"the {b.name} branch stopped: {why}")
     info = {
         "n_gradients": count.gradients,
