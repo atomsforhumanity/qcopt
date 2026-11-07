@@ -78,15 +78,17 @@ gradients; results are summarized in AFH's findings.
 ## Install
 
 ```sh
-pip install qcopt               # or: pip install "qcopt[qccompute]" for any program qccompute runs
+pip install "qcopt[axtb]"       # with axtb: in-process g-xTB and GFN2-xTB, analytic Hessians
+pip install "qcopt[qccompute]"  # any program qccompute runs
+pip install qcopt               # your own gradient function
 ```
 
-axtb (in-process g-xTB and GFN2-xTB with analytic Hessians) is installed from its
-[repository](https://github.com/atomsforhumanity/axtb) until it is on PyPI.
+[axtb](https://github.com/atomsforhumanity/axtb) 0.1.0 or newer. Its wheels are for x86-64
+Linux; elsewhere pip builds it from source, which needs Rust.
 
 ## Status
 
-0.1: the API may still change between minor versions.
+0.x: the API may still change between minor versions.
 
 ## License
 

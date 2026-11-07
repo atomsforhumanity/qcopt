@@ -19,8 +19,7 @@ Dependencies point one way: qcref -> qcdata -> {qcinf, qccodec} -> qccompute -> 
 ## Commands
 
 ```sh
-uv sync --all-groups                  # install
-uv pip install <axtb wheel>           # axtb is not on PyPI yet; its tests skip without it
+uv sync --all-groups --all-extras     # install, with axtb and qccompute (their tests skip without them)
 uv run pytest                         # tests
 uv run ruff check --fix . && uv run ruff format .
 uv run mypy

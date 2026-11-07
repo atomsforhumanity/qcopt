@@ -240,7 +240,7 @@ class AxtbEvaluator:
                 res = calc.hessian(x, vibrations=False, **hess_kw)
                 hess = np.asarray(res["hessian"], dtype=float)
             else:
-                res = calc.singlepoint(x)
+                res = calc.singlepoint(x, gradient=True)
                 hess = None
             return Answer(
                 positions=x,

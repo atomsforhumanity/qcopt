@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.2.2] - 2026-11-07
+
+### Fixed
+
+- With axtb 0.1.0, the first release on PyPI, every in-process axtb calculation failed
+  (`gradient failed: KeyError: 'gradient'`): its `Calculator.singlepoint` computes the
+  gradient only when asked, and qcopt now asks.
+
+### Added
+
+- The `axtb` extra (`pip install "qcopt[axtb]"`, axtb 0.1.0 or newer). CI installs it, so the
+  axtb tests (in-process runs, internal coordinates, constraints) run on every push.
+
 ## [0.2.1] - 2026-11-07
 
 Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.0.
@@ -135,7 +148,8 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
   `find_ts` and `irc` names the Hessian program only, and other values are errors
   (a string was ignored).
 
-[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.2.1...HEAD
+[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.2.2...HEAD
+[0.2.2]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.2
 [0.2.1]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.1
 [0.2.0]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.0
 [0.1.0]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.1.0
