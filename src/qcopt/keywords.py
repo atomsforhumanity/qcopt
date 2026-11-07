@@ -210,6 +210,10 @@ class IRCKeywords(_Keywords):
             less than ``flat_energy`` also ends it. A branch can end on a flat
             shoulder of the path, where the gradient vanishes without a minimum;
             ``minimize_ends`` (or minimizing the ends afterwards) then finds it.
+            From a very soft transition state the first step can already meet
+            this test: from a g-xTB saddle with a 27.5i cm^-1 mode (Reaction-QM
+            rxn_043), both branches ended after one step, about 20 kcal/mol above
+            the minima their minimizations reached.
         flat_energy: Energy change (Hartree) below which a step counts as flat.
         frozen_atoms: Atoms that do not move.
         fd_step: Step (bohr) of finite-difference Hessians.
