@@ -21,7 +21,10 @@ there, and qcdata's standard slots:
   as ``max_iter``), and for a failed gradient or Hessian calculation its ``program``
   and its own error (``cause``);
 - ``execution.timings``: ``subprograms`` (seconds in the gradient and Hessian
-  programs), ``optimizer`` (qcopt's own), ``total``.
+  programs), ``optimizer`` (qcopt's own), ``total``. Calculations run together as a
+  list advance in lockstep, so each one's timings are the list's;
+- ``execution.threads``: the threads this calculation ran with: the most its
+  children recorded, else its share of the threads granted to the list.
 """
 
 from __future__ import annotations
@@ -450,6 +453,9 @@ def _output(
         )
     keep = not p.context.separate_hessian
     frames = [_frame(a, s, keep) for a in result.frames]
+    used = [f.execution.threads for f in frames if f.execution.threads]
+    if used:  # what its children ran with, not the whole list's grant
+        common["execution"] = execution.model_copy(update={"threads": max(used)})
     record = dict(result.info)
     record["converged"] = result.converged
     extras: dict[str, Any] = {}
@@ -514,8 +520,8 @@ def run(
     Args:
         prepared: The calculations, checked by :func:`prepare`.
         evaluator: What computes their gradients and Hessians.
-        threads: The threads granted, shared by their subprograms; recorded in each
-            output's ``execution.threads``.
+        threads: The threads granted, shared by their subprograms. Each output's
+            ``execution.threads`` is what its own children recorded, else its share.
 
     Returns:
         One output per calculation, in order. One that fails or does not converge has
@@ -528,7 +534,8 @@ def run(
     results = drive(algs, contexts, evaluator, timings=timings)
     timings["total"] = time.perf_counter() - t0
     timings["optimizer"] = timings["total"] - timings["subprograms"]
+    share = None if threads is None else max(1, threads // max(1, len(prepared)))
     return [
-        _output(p, res, timings, threads)
+        _output(p, res, timings, share)
         for p, res in zip(prepared, results, strict=True)
     ]

@@ -21,7 +21,7 @@ from qcopt.calculation import prepare
 from qcopt.evaluators import SessionEvaluator, evaluator
 from qcopt.program import program
 
-from .helpers import irc, run
+from .helpers import irc, minimize, run
 from .surfaces import (
     MB_MINIMA,
     MB_SADDLES,
@@ -325,6 +325,40 @@ def test_irc_branches_and_their_end_minimizations_keep_their_own_lineage():
         )
     )
     assert np.isclose(ends[0], MB_MINIMA[0][0], atol=1e-3)
+
+
+def test_each_calculation_of_a_list_reports_the_threads_it_ran_with():
+    # ExecutionInfo.threads is what the calculation ran with: four calculations on
+    # 8 threads ran with 2 each, not with the list's 8
+    two = TOY.model_copy(update={"keywords": {"threads": 2}})
+    inputs = [
+        _input(structure=_trimer(1.1 + 0.01 * k), children=[two]) for k in range(4)
+    ]
+    outs = qccompute.Runner(threads=8).compute(inputs)
+    assert [o.execution.threads for o in outs] == [2, 2, 2, 2]
+
+
+class _ThreadedMBSession(_MBSession):
+    """A Müller-Brown session whose frames record that they ran on 3 threads."""
+
+    def compute_many(self, requests):
+        return [
+            f.model_copy(
+                update={"execution": f.execution.model_copy(update={"threads": 3})}
+            )
+            for f in super().compute_many(requests)
+        ]
+
+
+def test_the_threads_children_recorded_are_the_calculations():
+    ev = SessionEvaluator(lambda inp, t, c: _ThreadedMBSession(inp.structure, []))
+    out = minimize(
+        Structure(symbols=["H"], geometry=[[-0.5, 1.4, 0.0]]),
+        {"program": "muller-brown"},
+        evaluator=ev,
+    )
+    assert out.success, out.traceback
+    assert out.execution.threads == 3
 
 
 def test_displaced_gradients_start_from_the_centre_and_are_not_kept():

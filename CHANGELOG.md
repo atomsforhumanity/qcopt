@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+### Fixed
+
+- Each output of a list reports the threads its own calculation ran with
+  (`execution.threads`): the most its children recorded, else its share of the
+  list's threads. Every output reported the whole list's threads, so eight IRCs run
+  together on 64 threads each said 64, and a store's runs added up to eight times the
+  threads used.
+
 ## [0.3.0a3] - 2026-11-17
 
 ### Changed
