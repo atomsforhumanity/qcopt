@@ -145,9 +145,13 @@ def test_each_irc_branch_ends_with_a_code_the_record_schema_names():
     assert ends == {"forward": "max_iter", "reverse": "max_iter"}
     assert "the forward branch stopped: max_iter" in out.error.message
     schema = program.record_schema("irc")["properties"]["branches"]
-    assert schema["additionalProperties"]["properties"]["end"]["enum"] == list(BRANCH_ENDS)
+    assert schema["additionalProperties"]["properties"]["end"]["enum"] == list(
+        BRANCH_ENDS
+    )
     # with its ends minimized, the same IRC is a success
-    inp = inp.model_copy(update={"keywords": {**inp.keywords, "ends": {"minimize": True}}})
+    inp = inp.model_copy(
+        update={"keywords": {**inp.keywords, "ends": {"minimize": True}}}
+    )
     out = qccompute.compute(inp)
     assert out.success
     assert {b["end"] for b in out.record["branches"].values()} == {"max_iter"}
