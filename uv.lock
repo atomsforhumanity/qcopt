@@ -1183,7 +1183,7 @@ wheels = [
 
 [[package]]
 name = "qcopt"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1216,12 +1216,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "axtb", marker = "extra == 'axtb'", specifier = ">=0.1.0" },
+    { name = "axtb", marker = "extra == 'axtb'", specifier = ">=0.1.0,<0.2" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "qccodec", marker = "extra == 'qccompute'", specifier = ">=0.21.0" },
-    { name = "qccompute", marker = "extra == 'qccompute'", specifier = ">=0.22.0" },
-    { name = "qcdata", specifier = ">=0.23.1" },
+    { name = "qccodec", marker = "extra == 'qccompute'", specifier = ">=0.21.0,<0.22" },
+    { name = "qccompute", marker = "extra == 'qccompute'", specifier = ">=0.22.0,<0.23" },
+    { name = "qcdata", specifier = ">=0.23.1,<0.24" },
     { name = "qcref", specifier = ">=0.5.1" },
 ]
 provides-extras = ["axtb", "qccompute"]
