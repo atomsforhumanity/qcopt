@@ -103,35 +103,61 @@ def read_xyz(path: str) -> tuple[list[str], np.ndarray]:
 # ---------------------------------------------------------------- optimizers
 
 
-def run_qcopt(calc: Counted, sym, x0, task, gmax, maxiter, extra):
-    from qcdata import Structure
+COUNTED = "axtb-counted"
+
+
+def qcopt_compute(calc: Counted, sym, x, calctype, keywords, hessian=True, given=None):
+    """One ``qcopt.compute`` on the counted calculator, registered as a program.
+
+    The calculator runs in this process (a ``FunctionProgram``), so its counts and
+    timings are qcopt's gradients and Hessians. A failed calculation returns its
+    output (``ProgramError.output``).
+    """
+    from qccompute.program import FunctionProgram, register_program, unregister_program
+    from qcdata import ProgramError, ProgramInput, Structure
 
     import qcopt
 
+    register_program(
+        FunctionProgram(COUNTED, calc.gradient, calc.hessian if hessian else None)
+    )
+    try:
+        subprograms = [{"program": COUNTED, "calctype": "gradient"}]
+        if hessian:
+            subprograms.append({"program": COUNTED, "calctype": "hessian"})
+        inp = ProgramInput(
+            program="qcopt",
+            calctype=calctype,
+            structure=Structure(symbols=sym, geometry=x),
+            keywords=keywords,
+            subprograms=subprograms,
+            **({} if given is None else {"given": given}),
+        )
+        try:
+            return qcopt.compute(inp)
+        except ProgramError as exc:
+            if exc.output is None:
+                raise
+            return exc.output
+    finally:
+        unregister_program(COUNTED)
+
+
+def run_qcopt(calc: Counted, sym, x0, task, gmax, maxiter, extra):
     extra = dict(extra)
     use_h = not extra.pop("no_hessian", False)
-    ev = qcopt.FunctionEvaluator(
-        calc.gradient, calc.hessian if use_h else None, name="axtb"
-    )
-    s = Structure(symbols=sym, geometry=x0)
-    v03 = hasattr(qcopt, "options_schema")  # 0.3 settings groups; 0.2 flat keywords
-    hess = {"hessian_program" if v03 else "hessian": True if use_h else None}
     if task == "irc":
-        out = qcopt.irc(s, {"program": "axtb"}, evaluator=ev, **hess, **extra)
+        out = qcopt_compute(calc, sym, x0, "irc", extra, hessian=use_h)
         frames = [f.structure.geometry for f in out.results.frames]
         return bool(out.success), frames, len(frames), out.traceback
-    if v03:
-        conv = {"max_iter": maxiter, "g_tol": gmax, **extra.pop("convergence", {})}
-        kw = dict(convergence=conv, **extra)
-    else:
-        kw = dict(maxiter=maxiter, convergence={"gmax": gmax}, **extra)
-    fn = qcopt.find_ts if task == "ts" else qcopt.minimize
-    out = fn(s, {"program": "axtb"}, evaluator=ev, **hess, **kw)
-    x = out.results.final_structure.geometry
-    record = out.results.extras["record"] if v03 else out.results.extras
+    conv = {"max_iter": maxiter, "g_tol": gmax, **extra.pop("convergence", {})}
+    calctype = "transition_state" if task == "ts" else "optimization"
+    out = qcopt_compute(
+        calc, sym, x0, calctype, {"convergence": conv, **extra}, hessian=use_h
+    )
     return (
-        bool(record["converged"]),
-        x,
+        bool(out.record["converged"]),
+        out.results.final_structure.geometry,
         len(out.results.frames) - 1,
         out.traceback,
     )
@@ -268,34 +294,19 @@ def bonds(sym, x):
 
 def irc_check(a, sym, frames):
     """Minimize both IRC ends (qcopt, exact Hessian) and compare their bonds."""
-    from qcdata import Structure
-
-    import qcopt
-
     out = {"n_frames": len(frames)}
     ends = []
     for x in (frames[0], frames[-1]):
         c2 = Counted(a.method, sym, x, accuracy=a.accuracy)
-        ev = qcopt.FunctionEvaluator(c2.gradient, c2.hessian, name="axtb")
         # the same end minimization for every optimizer and round: Cartesian, exact
         # Hessians, frequencies checked
-        if hasattr(qcopt, "options_schema"):  # qcopt 0.3 settings groups
-            kw = dict(
-                hessian_program=True,
-                coordinate_system="cartesian",
-                freq={"check": True},
-                convergence={"max_iter": 2000},
-            )
-        else:
-            from qcopt.keywords import OptimizationKeywords
-
-            kw = dict(hessian=True, frequencies=True, maxiter=2000)
-            if "coordinates" in OptimizationKeywords.model_fields:
-                kw["coordinates"] = "cartesian"
-        m = qcopt.minimize(
-            Structure(symbols=sym, geometry=x), {"program": "axtb"}, evaluator=ev, **kw
+        kw = dict(
+            coordinate_system="cartesian",
+            freq={"check": True},
+            convergence={"max_iter": 2000},
         )
-        record = m.results.extras.get("record", m.results.extras)
+        m = qcopt_compute(c2, sym, x, "optimization", kw)
+        record = m.record
         ends.append(m.results.final_structure.geometry)
         out["end_min_grads"] = out.get("end_min_grads", 0) + c2.n_grad
         out["end_min_hess"] = out.get("end_min_hess", 0) + c2.n_hess
@@ -463,6 +474,7 @@ def main() -> None:
     }
     # import the optimizer before timing it
     if a.optimizer == "qcopt":
+        import qccompute  # noqa: F401
         import qcdata  # noqa: F401
 
         import qcopt  # noqa: F401
@@ -508,7 +520,7 @@ def main() -> None:
     if x is not None and a.task == "irc":
         rec.update(irc_check(a, sym, x))
     elif x is not None:
-        import qcopt
+        from qcopt.vibrations import frequencies
 
         check = Counted(a.method, sym, x, accuracy=a.accuracy)
         rec.update(geometry=np.asarray(x).tolist(), symbols=sym)
@@ -516,7 +528,7 @@ def main() -> None:
             e, g = check.gradient(x)
             rec.update(energy=e, gmax_final=float(np.sqrt((g * g).sum(1)).max()))
             h = check.hessian(x)
-            f = qcopt.frequencies(h, sym, x)
+            f = frequencies(h, sym, x)
             rec.update(
                 n_imaginary=f.n_imaginary(10.0),
                 lowest_cm=[float(v) for v in f.wavenumbers[:3]],

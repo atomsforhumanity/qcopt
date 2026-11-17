@@ -6,7 +6,7 @@ in-process, one thread per run). They need their own environment:
 ```sh
 cd benchmarks
 uv venv -p 3.12 .venv
-VIRTUAL_ENV=.venv uv pip install -e .. axtb==0.1.0 sella==2.6.0 ase==3.29.0 geometric==1.1.1 networkx
+VIRTUAL_ENV=.venv uv pip install --prerelease=allow -e .. axtb==0.1.1 sella==2.6.0 ase==3.29.0 geometric==1.1.1 networkx
 VIRTUAL_ENV=.venv uv pip install "optking @ git+https://github.com/psi-rking/optking.git@0.5.0"
 ```
 
@@ -33,8 +33,10 @@ for each round: every job imports them when it starts.
   step count indefinitely after failed back-transformations
   ([psi-rking/optking#117](https://github.com/psi-rking/optking/issues/117)), so give it a
   `--timeout`.
-- `batch_demo.py OUT.json --data DIR --n 64`: many minimizations with an ML potential through
-  qccompute, one at a time and in lockstep (`qcopt.run(list)`), with the time inside
-  qccompute (`compute_s`) apart from qcopt's own.
+- `batch_demo.py OUT.json --data DIR --n 64`: many minimizations with an ML potential, one at
+  a time (`qcopt.compute`) and as one list (`qccompute.compute(inputs)`: lockstep, one batch per
+  round), with the time spent waiting for gradients (`subprograms_s`) apart from the rest.
+- qcopt runs through `qcopt.compute`, with the counted axtb calculator registered as a program
+  (`qccompute.program.FunctionProgram`) that runs in the benchmark's process.
 
-Data (Reaction-QM structures, Jan's F0001 tables) and results live outside the repo.
+Data (Reaction-QM structures, published findings' tables) and results live outside the repo.

@@ -1,15 +1,17 @@
-"""Many minimizations with an ML potential: one at a time vs. in lockstep.
+"""Many minimizations with an ML potential: one at a time vs. as one list.
 
-Every optimization runs through qccompute (``qcopt.ComputeEvaluator``). One at a time,
-each gradient is its own call; in lockstep (``qcopt.run(list)``) each round's
-gradients from all optimizations go to qccompute in one call, which the AIMNet2 codec
-evaluates in batches.
+Every optimization is a ``qcopt`` ``ProgramInput`` with an ML-potential gradient
+subprogram. One at a time (``qcopt.compute(inp)``), each round's gradient is a call of
+its own; as one list (``qccompute.compute(inputs)``), qcopt runs them in lockstep and
+hands each round's gradients from every optimization to the runner as one batch, which
+the ML potential evaluates together (on a GPU, if one is granted).
 
-usage: batch_demo.py OUT.json --data DIR --n 64 [--model aimnet2] [--modes lockstep sequential]
+usage: batch_demo.py OUT.json --data DIR --n 64 [--model aimnet2] [--modes list sequential]
 
 DIR holds one folder per reaction with start.xyz and end.xyz (Angstrom); the first N of the
-sorted starts, then ends, are minimized. ``compute_s`` in the output is the time spent inside
-qccompute (the model), the rest of ``wall`` is qcopt's own work.
+sorted starts, then ends, are minimized. ``subprograms_s`` in the output is the time the
+optimizations spent waiting for gradients (summed over them); the rest of ``wall`` is
+qcopt's own work and the runner's.
 """
 
 from __future__ import annotations
@@ -52,28 +54,17 @@ def main() -> None:
     p.add_argument("--data", required=True, help="folder of <reaction>/{start,end}.xyz")
     p.add_argument("--n", type=int, default=64)
     p.add_argument("--model", default="aimnet2")
-    p.add_argument("--modes", nargs="+", default=["lockstep", "sequential"])
+    p.add_argument("--modes", nargs="+", default=["list", "sequential"])
     p.add_argument("--maxiter", type=int, default=500)
     a = p.parse_args()
 
     import qccompute
-    from qcdata import CalcType, ProgramInput, ProgramSpec
+    from qcdata import CalcType, ProgramError, ProgramInput, ProgramSpec
 
     import qcopt
 
-    calls = []
-    compute_s = [0.0]
-
-    def compute(inputs):
-        calls.append(len(inputs))
-        t = time.perf_counter()
-        try:
-            return qccompute.compute(inputs, raise_exc=False)
-        finally:
-            compute_s[0] += time.perf_counter() - t
-
     grad = ProgramSpec(
-        program="aimnet2", calctype=CalcType.gradient, model={"method": a.model}
+        program=a.model, calctype=CalcType.gradient, model={"method": a.model}
     )
     inputs = [
         ProgramInput(
@@ -81,46 +72,46 @@ def main() -> None:
             calctype="optimization",
             structure=s,
             subprograms=[grad],
-            keywords={"convergence": {"max_iter": a.maxiter}}
-            if hasattr(qcopt, "options_schema")
-            else {"maxiter": a.maxiter},
+            keywords={"convergence": {"max_iter": a.maxiter}},
         )
         for s in structures(a.data, a.n)
     ]
-    # load the model once before timing
+    # start the model once before timing
     qccompute.compute(ProgramInput.from_spec(grad, inputs[0].structure))
     record = {"n": len(inputs), "model": a.model, "modes": {}}
     for mode in a.modes:
-        calls.clear()
-        compute_s[0] = 0.0
-        ev = qcopt.ComputeEvaluator(compute)
         t0 = time.perf_counter()
-        if mode == "lockstep":
-            outs = qcopt.run(inputs, evaluator=ev)
+        if mode == "list":
+            outs = qccompute.compute(inputs, raise_exc=False)
         else:
-            outs = [qcopt.run(inp, evaluator=ev) for inp in inputs]
+            outs = []
+            for inp in inputs:
+                try:
+                    outs.append(qcopt.compute(inp))
+                except ProgramError as exc:
+                    outs.append(exc.output)
         wall = time.perf_counter() - t0
-        grads = [o.results.extras.get("n_gradients", 0) for o in outs]
-        energies = [float(o.results.final_energy) for o in outs]
+        grads = [o.record.get("n_gradients", 0) for o in outs]
+        waiting = sum(o.execution.timings.get("subprograms", 0.0) for o in outs)
         record["modes"][mode] = {
             "wall": wall,
             "converged": sum(bool(o.success) for o in outs),
             "gradients": int(sum(grads)),
-            "compute_calls": len(calls),
-            "largest_call": max(calls) if calls else 0,
-            "compute_s": compute_s[0],
-            "energies": energies,
+            "subprograms_s": waiting,
+            "energies": [
+                float(o.results.final_energy) if o.results.frames else None
+                for o in outs
+            ],
         }
         print(
             mode,
-            f"wall {wall:.1f} s ({compute_s[0]:.1f} s in qccompute), "
-            f"{sum(grads)} gradients in {len(calls)} calls, "
+            f"wall {wall:.1f} s, {sum(grads)} gradients, "
             f"{record['modes'][mode]['converged']}/{len(outs)} converged",
             flush=True,
         )
-    if {"lockstep", "sequential"} <= set(record["modes"]):
-        e1 = np.array(record["modes"]["lockstep"]["energies"])
-        e2 = np.array(record["modes"]["sequential"]["energies"])
+    if {"list", "sequential"} <= set(record["modes"]):
+        e1 = np.array(record["modes"]["list"]["energies"], dtype=float)
+        e2 = np.array(record["modes"]["sequential"]["energies"], dtype=float)
         record["max_energy_difference"] = float(np.nanmax(np.abs(e1 - e2)))
         print(
             "largest energy difference between modes:", record["max_energy_difference"]
