@@ -36,14 +36,18 @@ def _xy(structure):
 @pytest.mark.parametrize("hessian", [None, True])
 def test_minimize_finds_each_minimum(start, expected, hessian):
     out = qcopt.minimize(
-        _structure(*start), SPEC, hessian=hessian, evaluator=_evaluator(), trust=0.1
+        _structure(*start),
+        SPEC,
+        hessian_program=hessian,
+        evaluator=_evaluator(),
+        trust={"radius": 0.1},
     )
     assert out.success
     assert isinstance(out.results, OptimizationData)
     assert np.allclose(_xy(out.results.final_structure), MB_MINIMA[expected], atol=1e-4)
     assert out.results.provenance.program == "qcopt"
     assert out.results.frames[0].results.provenance.program == "muller-brown"
-    assert out.results.extras["converged"]
+    assert out.record["converged"]
 
 
 @pytest.mark.parametrize("start, expected", [((-0.7, 0.6), 0), ((0.25, 0.3), 1)])
@@ -52,9 +56,9 @@ def test_find_ts_finds_each_saddle(start, expected, hessian):
     out = qcopt.find_ts(
         _structure(*start),
         SPEC,
-        hessian=hessian,
+        hessian_program=hessian,
         evaluator=_evaluator(hessian is True),
-        trust=0.1,
+        trust={"radius": 0.1},
     )
     assert out.success, out.traceback
     assert np.allclose(
@@ -68,11 +72,11 @@ def test_irc_connects_the_minima(saddle, ends, every):
     out = qcopt.irc(
         _structure(*MB_SADDLES[saddle]),
         SPEC,
-        hessian=True,
+        hessian_program=True,
         evaluator=_evaluator(),
-        step_size=0.05,
-        gmax=1e-4,
-        hessian_every=every,
+        irc={"step": 0.05},
+        convergence={"g_tol": 1e-4},
+        hessian={"recompute_every": every},
     )
     assert out.success, out.traceback
     path = out.results
@@ -104,7 +108,7 @@ def test_run_many_inputs_together_batches_requests():
             calctype="optimization",
             structure=_structure(*s),
             subprograms=[grad],
-            keywords={"trust": 0.1},
+            keywords={"trust": {"radius": 0.1}},
         )
         for s in [(-0.4, 1.2), (0.3, 0.2), (0.0, 0.6)]
     ]
@@ -125,8 +129,8 @@ def test_failed_gradient_is_reported_with_frames():
         _structure(-0.05, 0.47),
         SPEC,
         evaluator=qcopt.FunctionEvaluator(broken),
-        trust=0.5,
-        maxiter=5,
+        trust={"radius": 0.5},
+        convergence={"max_iter": 5},
     )
     # either it converged without crossing x=0, or the failure is reported with frames kept
     assert out.success or (out.traceback and out.results.frames)
@@ -147,7 +151,9 @@ def test_unknown_keywords_are_errors():
 
 
 def test_not_converged_keeps_frames_and_fails():
-    out = qcopt.minimize(_structure(-0.4, 1.2), SPEC, evaluator=_evaluator(), maxiter=2)
+    out = qcopt.minimize(
+        _structure(-0.4, 1.2), SPEC, evaluator=_evaluator(), convergence={"max_iter": 2}
+    )
     assert not out.success
     assert len(out.results.frames) >= 2
     assert "not converged" in out.traceback
@@ -157,13 +163,14 @@ def test_output_round_trips_through_json():
     out = qcopt.find_ts(
         _structure(-0.7, 0.6),
         SPEC,
-        hessian=True,
+        hessian_program=True,
         evaluator=_evaluator(),
-        frequencies=True,
+        freq={"check": True},
     )
     again = type(out).model_validate_json(out.model_dump_json())
-    assert again.results.frames[-1].results.freqs_wavenumber
-    assert again.results.extras["n_imaginary"] == 1
+    analysis = again.results.frames[-1].results.vibrational_analysis
+    assert analysis.n_imaginary(10.0) == 1
+    assert again.record["n_imaginary"] == 1
 
 
 @pytest.mark.parametrize("step", [0.15, 0.3])
@@ -171,10 +178,10 @@ def test_irc_with_long_steps_still_reaches_the_minima(step):
     out = qcopt.irc(
         _structure(*MB_SADDLES[0]),
         SPEC,
-        hessian=True,
+        hessian_program=True,
         evaluator=_evaluator(),
-        step_size=step,
-        gmax=1e-4,
+        irc={"step": step},
+        convergence={"g_tol": 1e-4},
     )
     assert out.success, out.traceback
     path = out.results
@@ -189,10 +196,10 @@ def test_irc_minimize_ends_lands_on_the_minima():
     out = qcopt.irc(
         _structure(*MB_SADDLES[0]),
         SPEC,
-        hessian=True,
+        hessian_program=True,
         evaluator=_evaluator(),
-        step_size=0.1,
-        minimize_ends=True,
+        irc={"step": 0.1},
+        ends={"minimize": True},
     )
     assert out.success, out.traceback
     path = out.results
@@ -202,7 +209,7 @@ def test_irc_minimize_ends_lands_on_the_minima():
     )
     assert np.allclose(ends[0], MB_MINIMA[0], atol=1e-4)
     assert np.allclose(ends[1], MB_MINIMA[2], atol=1e-4)
-    info = path.extras["end_minimization"]
+    info = out.record["ends"]
     assert info["forward"]["converged"] and info["reverse"]["converged"]
     assert np.allclose(_xy(path.transition_state.structure), MB_SADDLES[0])
 
@@ -212,11 +219,10 @@ def test_gs2_irc_reaches_the_minima(step):
     out = qcopt.irc(
         _structure(*MB_SADDLES[1]),
         SPEC,
-        hessian=True,
+        hessian_program=True,
         evaluator=_evaluator(),
-        method="gs2",
-        step_size=step,
-        gmax=1e-4,
+        irc={"method": "gs2", "step": step},
+        convergence={"g_tol": 1e-4},
     )
     assert out.success, out.traceback
     path = out.results
@@ -231,7 +237,7 @@ def test_gs2_irc_reaches_the_minima(step):
 
 
 def test_gs2_step_lands_on_the_sphere_around_the_pivot():
-    from qcopt.algorithms import _gs2_step
+    from qcopt.algorithms.reaction_path import gs2_step as _gs2_step
 
     vals = np.array([0.2, 0.5, 1.3])
     g = np.array([0.3, -0.1, 0.05])

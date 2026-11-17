@@ -2,8 +2,29 @@
 
 from .api import find_ts, irc, minimize, run
 from .driver import Answer, Ask, Request, TaskContext, drive
+from .errors import InputError, QcoptError
 from .evaluators import AxtbEvaluator, ComputeEvaluator, FunctionEvaluator
-from .keywords import Constraints, Convergence, IRCKeywords, OptimizationKeywords
+from .options import (
+    ConstraintSettings,
+    ConvergenceSettings,
+    EndSettings,
+    EscapeSettings,
+    FreqSettings,
+    HessianSettings,
+    IRCConstraintSettings,
+    IRCConvergenceSettings,
+    IRCHessianSettings,
+    IRCOptions,
+    IRCSettings,
+    MinimizationTrustSettings,
+    ModeSettings,
+    OptimizationOptions,
+    TransitionStateHessianSettings,
+    TransitionStateOptions,
+    TrustSettings,
+    default_options,
+    options_schema,
+)
 from .vibrations import Frequencies, frequencies
 
 __all__ = [
@@ -11,18 +32,35 @@ __all__ = [
     "Ask",
     "AxtbEvaluator",
     "ComputeEvaluator",
-    "Constraints",
-    "Convergence",
+    "ConstraintSettings",
+    "ConvergenceSettings",
+    "EndSettings",
+    "EscapeSettings",
+    "FreqSettings",
     "Frequencies",
     "FunctionEvaluator",
-    "IRCKeywords",
-    "OptimizationKeywords",
+    "HessianSettings",
+    "IRCConstraintSettings",
+    "IRCConvergenceSettings",
+    "IRCHessianSettings",
+    "IRCOptions",
+    "IRCSettings",
+    "InputError",
+    "MinimizationTrustSettings",
+    "ModeSettings",
+    "OptimizationOptions",
+    "QcoptError",
     "Request",
     "TaskContext",
+    "TransitionStateHessianSettings",
+    "TransitionStateOptions",
+    "TrustSettings",
+    "default_options",
     "drive",
     "find_ts",
     "frequencies",
     "irc",
     "minimize",
+    "options_schema",
     "run",
 ]

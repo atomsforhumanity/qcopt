@@ -81,7 +81,9 @@ def main() -> None:
             calctype="optimization",
             structure=s,
             subprograms=[grad],
-            keywords={"maxiter": a.maxiter},
+            keywords={"convergence": {"max_iter": a.maxiter}}
+            if hasattr(qcopt, "options_schema")
+            else {"maxiter": a.maxiter},
         )
         for s in structures(a.data, a.n)
     ]

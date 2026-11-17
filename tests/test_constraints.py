@@ -40,8 +40,8 @@ def test_dihedral_and_distance_targets(coordinates):
     out = qcopt.minimize(
         BUTANE,
         GFN2,
-        hessian=True,
-        coordinates=coordinates,
+        hessian_program=True,
+        coordinate_system=coordinates,
         constraints={"dihedral": [[0, 1, 2, 3, 60.0]], "distance": [[0, 1, 2.95]]},
     )
     assert out.success, out.traceback
@@ -60,8 +60,8 @@ def test_keep_starting_angle():
     out = qcopt.minimize(
         BUTANE,
         GFN2,
-        hessian=True,
-        coordinates="tric",
+        hessian_program=True,
+        coordinate_system="tric",
         constraints={"angle": [[0, 1, 2]]},
     )
     assert out.success, out.traceback

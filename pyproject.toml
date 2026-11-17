@@ -10,6 +10,8 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.24.0",
     "pydantic>=2.0",
+    # pins move to the releases with the program protocol in qccompute (qcdata data-only)
+    "qccompute>=0.22.0",
     "qcdata>=0.23.1",
     "qcref>=0.5.1",
 ]
@@ -32,10 +34,9 @@ Changelog = "https://github.com/atomsforhumanity/qcopt/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 axtb = ["axtb>=0.1.0"]
-qccompute = ["qccompute>=0.22.0", "qccodec>=0.21.0"]
 
-[project.entry-points."qccodec.codecs"]
-qcopt = "qcopt.codec:codec"
+[project.entry-points."qccompute.programs"]
+qcopt = "qcopt.program:program"
 
 [dependency-groups]
 dev = [

@@ -6,6 +6,114 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+qcopt 0.3 reorganizes the settings and the results; the algorithms compute exactly what
+0.2.2 computed (checked bit for bit on 77 golden trajectories: model surfaces, minima,
+transition states and IRCs at GFN2-xTB and g-xTB, constraints, frozen atoms, Hessian
+programs, guide modes, batched runs).
+
+### Changed
+
+- **Settings come in groups**, one options model per calculation type
+  (`OptimizationOptions`, `TransitionStateOptions`, `IRCOptions`), with the rules shared
+  with axtb and linus. The 0.2 keywords and where they went:
+  - `maxiter`, IRC `max_steps` → `convergence.max_iter`; `convergence.gmax`, `grms`,
+    `dmax`, `energy` → `convergence.g_tol`, `g_rms_tol`, `d_tol`, `e_tol`; IRC `gmax` →
+    `convergence.g_tol`, `flat_energy` → `convergence.e_tol`;
+  - `coordinates` → `coordinate_system` (default `auto`: TRIC, Cartesians with frozen
+    atoms; explicit `tric` or `dlc` with frozen atoms is an error);
+  - `initial_hessian`, `update`, `hessian_every`, `fd_step` → `hessian.initial`,
+    `hessian.update`, `hessian.recompute_every`, `hessian.step`;
+    `recompute_hessian_on_loss`, `min_steps_between_hessians`, `lost_curvature` →
+    `hessian.recompute_on_loss`, `hessian.recompute_min_steps`, `hessian.lost_curvature`;
+  - `trust`, `trust_min`, `trust_max`, `trust_type`, `max_rejections` → `trust.radius`,
+    `trust.min`, `trust.max`, `trust.measure`, `trust.max_rejections`;
+  - `frozen_atoms`, `constraint_tolerance`, `max_correction` → `constraints.frozen`,
+    `constraints.tol`, `constraints.max_correction` (with `constraints.distance`, `angle`,
+    `dihedral`);
+  - `mode`, `follow` → `mode.guide`, `mode.follow`; `frequencies`, `imaginary_cutoff` →
+    `freq.check`, `freq.imaginary_cutoff`; `escape_saddles`, `escape_step` →
+    `escape.attempts`, `escape.step`;
+  - IRC `direction`, `step_size`, `method` → `irc.direction`, `irc.step`, `irc.method`;
+    `minimize_ends`, `end_coordinates`, `end_maxiter`, `end_convergence` →
+    `ends.minimize`, `ends.coordinate_system`, `ends.max_iter`, `ends.g_tol` (and
+    `ends.g_rms_tol`, `ends.d_tol`, `ends.e_tol`).
+
+  A 0.2 keyword is an error that names its new place; another misspelling suggests the
+  closest setting.
+- **`minimize`, `find_ts` and `irc` take `program` and `hessian_program=`** (was
+  `gradient` and `hessian=`): `hessian` is now the settings group.
+- **Results use qcdata's standard slots** (qcdata 0.24): `resolved` (`settings` with
+  every `auto` replaced, which reproduce the run, and `reasons`), `record` (the counts
+  and diagnostics 0.2 put in `extras`, IRC `branches` and `ends`), `error`
+  (`kind`: `input`, `program`, `convergence`, `numerical`, `internal`; `code`, such as
+  `max_iter` or `not_first_order_saddle`; for a failed gradient or Hessian calculation
+  its `program` and its own error as `cause`) and `execution.timings` (`evaluator`,
+  `optimizer`, `total`); `warnings` stays empty. An IRC branch that runs out of steps
+  ends with `max_iter` (was `max_steps`).
+- Settings of another calculation type, and settings given that cannot affect the
+  calculation (IRC `ends.*` without `ends.minimize`, `escape.step` without
+  `escape.attempts`, `mode.follow` without `mode.guide`, `hessian.step` with a Hessian
+  subprogram, ...), are errors; so are saddle escapes with distance, angle or dihedral
+  constraints, which 0.2 skipped silently. Settings that act only if a condition arises
+  are allowed. `resolved.settings` leaves out settings that cannot take effect.
+- Errors in the input raise `qcopt.InputError` (a `ValueError`) before anything is
+  computed.
+- **qccompute is a dependency** (it holds AFH's program protocol); the `qcopt[qccompute]`
+  extra and qcopt's qccodec codec are gone: qccompute runs qcopt as a native program.
+- `irc`'s first argument is `start` (a structure, or `find_ts`'s output).
+
+### Added
+
+- **qcopt is an AFH program** (`qccompute.programs` entry point `qcopt`,
+  `qcopt.program`): qccompute runs it natively, and its children are computed through
+  program sessions (`SessionEvaluator`): one per calculation and program,
+  warm-started, with each IRC branch (and its end minimization) its own lineage, the
+  displaced gradients of finite-difference Hessians one batch, and calculations side by
+  side when the child program is thread-safe. A failed child's own error becomes the
+  `cause` of qcopt's `program` error, whose message starts with the child and its
+  calculation type (`linus (gradient): ...`), AFH's rule for drivers; every `program`
+  error has a cause (`internal` for an evaluator's exception, `numerical` for a
+  non-finite result), and the child's traceback follows the message in `traceback`.
+  A failed separate Hessian program, or a failed displaced gradient of a
+  finite-difference Hessian, is named as the program that failed. `plan` checks the
+  settings of the children it can find before anything is computed; a child that
+  refuses its settings at run time fails only its own calculation, not the others in
+  the batch. Calculations run side by side, as many at a time as the granted threads
+  allow (qccompute makes concurrent sessions safe); the displaced gradients of a
+  finite-difference Hessian start from the centre's calculation and do not become its
+  lineage's history (`commit=False`). Input errors carry AFH's codes (`InputError.code`,
+  `error.code`: `unknown_key`, `not_applicable`, `no_effect`).
+- **Starting from a known Hessian** (`ProgramInput.given`, `given=`): the given
+  Hessian, from any program, is an optimization's initial one or an IRC's at the
+  transition state (`hessian.initial` `given`, what `auto` becomes when there is one;
+  `resolved.reasons` names its program). It is a starting guess: energies and gradients
+  are computed, and no frame holds it. Other given fields are left alone; given results
+  without a Hessian are an error (`not_applicable`). `qcopt.irc(ts_output, ...)` starts
+  from `find_ts`'s output and reuses its last frame's Hessian (`freq.check`) when it
+  would compute the same one (the same Hessian program, method and settings).
+- Without an `evaluator`, `qcopt.run` (and `minimize`, `find_ts`, `irc`) computes a
+  program with sessions of its own through them (`qccompute.session`), so each step
+  starts from the last instead of from scratch; axtb still runs in this process and
+  other programs through `qccompute.compute` (`qcopt.evaluators.default_evaluator`
+  chooses per calculation).
+- `Ask.lineage` and `Request.lineage`; evaluators may define `forget(task)`, called when
+  a task finishes.
+- `qcopt.default_options(calctype)`, `qcopt.options_schema(calctype)` (JSON Schema with
+  units and tiers), `docs/settings.md` (generated from the models) and
+  `docs/choosing-settings.md` (the benchmark evidence behind the defaults).
+- `ARCHITECTURE.md`.
+
+### Internal
+
+- The rigid-motion basis of recent geometries is kept instead of recomputed (an IRC
+  step asked for it three times): 19% less of qcopt's own time on an HCN TS search and
+  IRC, results unchanged bit for bit.
+
+- `algorithms.py` is a package: the minimization and transition-state search is one class
+  whose phases are short generator methods, the IRC branch a class, the thresholds named
+  constants with their rationale; `drive` plans each ask with a small class (direct,
+  paired, finite difference).
+
 ## [0.2.2] - 2026-11-07
 
 ### Fixed

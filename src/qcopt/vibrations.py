@@ -22,10 +22,14 @@ class Frequencies:
         wavenumbers: Frequencies in cm^-1, ascending; imaginary ones negative.
         modes: ``(n_modes, n_atoms, 3)`` Cartesian displacements of unit length, in
             the order of ``wavenumbers`` (qcdata's ``normal_modes_cartesian``).
+        masses: Per-atom masses used (u).
+        projected: Whether rigid translations and rotations were projected out.
     """
 
     wavenumbers: Array
     modes: Array
+    masses: Array | None = None
+    projected: bool = True
 
     def n_imaginary(self, cutoff_cm: float = IMAGINARY_CUTOFF_CM) -> int:
         """Number of modes below ``-cutoff_cm``."""
@@ -77,4 +81,10 @@ def frequencies(
     cart /= np.linalg.norm(cart, axis=0)
     modes = np.zeros((len(vals), n, 3))
     modes[:, free, :] = cart.T.reshape(len(vals), len(free), 3)
-    return Frequencies(wavenumbers=wavenumbers, modes=modes)
+    projected = project and len(frozen) == 0 and n > 1
+    return Frequencies(
+        wavenumbers=wavenumbers,
+        modes=modes,
+        masses=masses(symbols),
+        projected=projected,
+    )

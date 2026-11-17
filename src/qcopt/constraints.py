@@ -17,7 +17,7 @@ import numpy as np
 
 from . import primitives as prim
 from .geometry import Array
-from .keywords import Constraints
+from .options import ConstraintSettings
 
 _MAX_ANGLE_DEGREES = 175.0
 
@@ -32,7 +32,7 @@ class ConstraintSet:
     """The constraints of one optimization and their targets.
 
     Args:
-        spec: The ``constraints`` keyword.
+        spec: The ``constraints`` settings.
         positions: Starting geometry (bohr); targets left out keep its values.
         frozen: Atoms that do not move.
 
@@ -44,7 +44,7 @@ class ConstraintSet:
     """
 
     def __init__(
-        self, spec: Constraints, positions: Array, frozen: Sequence[int] = ()
+        self, spec: ConstraintSettings, positions: Array, frozen: Sequence[int] = ()
     ) -> None:
         """Collect index arrays and targets (bohr, radians)."""
         x = np.asarray(positions, dtype=float).reshape(-1, 3)

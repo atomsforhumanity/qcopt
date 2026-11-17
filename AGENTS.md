@@ -6,15 +6,18 @@ Instructions for AI coding agents (and a quick reference for people) working in 
 
 `qcopt` optimizes structures: minima, transition states, and IRCs. It is AFH's own optimizer, meant to replace Sella, geomeTRIC, and ASE's optimizers in our stack. Inputs are qcdata `ProgramInput`s with `program="qcopt"` and gradient (and optionally Hessian) subprograms; outputs are qcdata `ProgramOutput`s holding `OptimizationData` or `PathData`.
 
-- **Algorithms are generators** (`qcopt/algorithms.py`): they yield the geometries where they need gradients or Hessians and receive the answers. `qcopt.driver.drive` runs many of them in lockstep and hands each round's requests to an evaluator in one call. Never call a program from inside an algorithm.
-- **Evaluators** (`qcopt/evaluators.py`) compute requests: axtb in-process (our own codes come first: no subprocess, wavefunction reuse, threads), qccompute for every other program, or a Python function.
+- **Read [ARCHITECTURE.md](ARCHITECTURE.md) first**: the modules, how a run flows, where to extend, the invariants.
+- **Algorithms are generators** (`qcopt/algorithms/`): they yield the geometries where they need gradients or Hessians and receive the answers. `qcopt.driver.drive` runs many of them in lockstep and hands each round's requests to an evaluator in one call. Never call a program from inside an algorithm.
+- **Settings** (`qcopt/options.py`): one pydantic model per calculation type, made of groups (`convergence.g_tol`, `hessian.initial`, ...), following the rules shared with axtb and linus (two levels at most, `_tol`, `max_iter`, `"auto"` resolved and reported). A new setting goes in a group with its unit and tier; `scripts/settings_doc.py` regenerates `docs/settings.md` (a test checks it).
+- **Evaluators** (`qcopt/evaluators.py`) compute requests: axtb in-process (our own codes come first: no subprocess, wavefunction reuse, threads), sessions of programs that have them (`qcopt/program.py`, warm-started), qccompute for every other program, or a Python function.
 - **Atomic units everywhere** (bohr, Hartree); qcref constants as `from qcref import constants as c` and `c.NAME`, never copied into module variables.
-- **Fail loudly**: unknown keywords are errors (pydantic models in `qcopt/keywords.py`). A run that fails or does not converge returns `success=False` with its frames kept.
+- **Fail loudly**: unknown settings are errors with a suggestion; so are settings of another calculation type and settings given that cannot affect the calculation (`options.without_effect`). Settings that act only if a condition arises are allowed. A run that fails or does not converge returns `success=False` with its frames kept and a typed `error` (kind and code; for a failed gradient or Hessian, the program and its own error as `cause`).
+- **Keep behaviour unless you mean to change it**: a refactor must reproduce the golden trajectories bit for bit (AFH's golden-trajectory harness: record before, record after, compare); a change to results needs the benchmark (`benchmarks/`).
 - **Our own implementation.** Sella (LGPL-3.0), geomeTRIC (BSD-3 with a non-AI clause), OptKing (BSD-3) and pysisyphus may be read as guides; implement from the papers and cite them in docstrings. Never copy their code.
 
 ## The qc* suite
 
-Dependencies point one way: qcref -> qcdata -> {qcinf, qccodec} -> qccompute -> qcopt. qccompute is optional (only the `ComputeEvaluator` needs it).
+Dependencies point one way: qcref -> qcdata -> {qcinf, qccodec} -> qccompute -> qcopt. qcopt implements qccompute's program protocol (`qccompute.program`) and is found through the `qccompute.programs` entry point.
 
 ## Commands
 
@@ -23,6 +26,7 @@ uv sync --all-groups --all-extras     # install, with axtb and qccompute (their 
 uv run pytest                         # tests
 uv run ruff check --fix . && uv run ruff format .
 uv run mypy
+uv run python scripts/settings_doc.py   # after changing a setting
 ```
 
 Benchmarks against Sella and geomeTRIC live in `benchmarks/` with their own venv (see `benchmarks/README.md`). Benchmark data and results stay outside the repo.

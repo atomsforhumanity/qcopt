@@ -114,20 +114,23 @@ def run_qcopt(calc: Counted, sym, x0, task, gmax, maxiter, extra):
         calc.gradient, calc.hessian if use_h else None, name="axtb"
     )
     s = Structure(symbols=sym, geometry=x0)
+    v03 = hasattr(qcopt, "options_schema")  # 0.3 settings groups; 0.2 flat keywords
+    hess = {"hessian_program" if v03 else "hessian": True if use_h else None}
     if task == "irc":
-        out = qcopt.irc(
-            s, {"program": "axtb"}, hessian=use_h or None, evaluator=ev, **extra
-        )
+        out = qcopt.irc(s, {"program": "axtb"}, evaluator=ev, **hess, **extra)
         frames = [f.structure.geometry for f in out.results.frames]
         return bool(out.success), frames, len(frames), out.traceback
-    kw = dict(maxiter=maxiter, convergence={"gmax": gmax}, **extra)
+    if v03:
+        conv = {"max_iter": maxiter, "g_tol": gmax, **extra.pop("convergence", {})}
+        kw = dict(convergence=conv, **extra)
+    else:
+        kw = dict(maxiter=maxiter, convergence={"gmax": gmax}, **extra)
     fn = qcopt.find_ts if task == "ts" else qcopt.minimize
-    out = fn(
-        s, {"program": "axtb"}, hessian=True if use_h else None, evaluator=ev, **kw
-    )
+    out = fn(s, {"program": "axtb"}, evaluator=ev, **hess, **kw)
     x = out.results.final_structure.geometry
+    record = out.results.extras["record"] if v03 else out.results.extras
     return (
-        bool(out.results.extras["converged"]),
+        bool(record["converged"]),
         x,
         len(out.results.frames) - 1,
         out.traceback,
@@ -274,29 +277,30 @@ def irc_check(a, sym, frames):
     for x in (frames[0], frames[-1]):
         c2 = Counted(a.method, sym, x, accuracy=a.accuracy)
         ev = qcopt.FunctionEvaluator(c2.gradient, c2.hessian, name="axtb")
-        from qcopt.keywords import OptimizationKeywords
+        # the same end minimization for every optimizer and round: Cartesian, exact
+        # Hessians, frequencies checked
+        if hasattr(qcopt, "options_schema"):  # qcopt 0.3 settings groups
+            kw = dict(
+                hessian_program=True,
+                coordinate_system="cartesian",
+                freq={"check": True},
+                convergence={"max_iter": 2000},
+            )
+        else:
+            from qcopt.keywords import OptimizationKeywords
 
-        same = (
-            {"coordinates": "cartesian"}
-            if "coordinates" in OptimizationKeywords.model_fields
-            else {}
-        )
+            kw = dict(hessian=True, frequencies=True, maxiter=2000)
+            if "coordinates" in OptimizationKeywords.model_fields:
+                kw["coordinates"] = "cartesian"
         m = qcopt.minimize(
-            Structure(symbols=sym, geometry=x),
-            {"program": "axtb"},
-            hessian=True,
-            evaluator=ev,
-            frequencies=True,
-            maxiter=2000,
-            **same,  # the same end minimization for every optimizer and round
+            Structure(symbols=sym, geometry=x), {"program": "axtb"}, evaluator=ev, **kw
         )
+        record = m.results.extras.get("record", m.results.extras)
         ends.append(m.results.final_structure.geometry)
         out["end_min_grads"] = out.get("end_min_grads", 0) + c2.n_grad
         out["end_min_hess"] = out.get("end_min_hess", 0) + c2.n_hess
         out["end_min_seconds"] = out.get("end_min_seconds", 0.0) + c2.t_grad + c2.t_hess
-        out.setdefault("end_n_imaginary", []).append(
-            m.results.extras.get("n_imaginary")
-        )
+        out.setdefault("end_n_imaginary", []).append(record.get("n_imaginary"))
         out.setdefault("end_energy", []).append(float(m.results.final_energy))
         out.setdefault("end_drop_kcal", []).append(
             float(

@@ -7,12 +7,15 @@
   ``Compute``), one list per round, so any program with a codec works and children
   are batched or run side by side by the runner.
 - :class:`FunctionEvaluator` calls a Python function, for model surfaces and tests.
-- :func:`default_evaluator` picks axtb in-process where it can, else qccompute.
+- :func:`default_evaluator` picks for each task: axtb in-process, a program's own
+  sessions (:class:`qcopt.program.SessionEvaluator` over ``qccompute.session``), or
+  qccompute.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import traceback
 from collections import defaultdict
 from collections.abc import Callable, Sequence
@@ -55,6 +58,28 @@ def _map_tasks(
         with ThreadPoolExecutor(max_workers=min(workers, len(groups))) as pool:
             list(pool.map(run_group, groups.values()))
     return [a for a in answers if a is not None]
+
+
+_EXCEPTION_LINE = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt)(: |$)")
+
+
+def summary(error: Any, traceback_text: str | None) -> str:
+    """A failed calculation's message in one line.
+
+    The first line of the program's own error (``ErrorInfo.message``: AFH's programs
+    and qccompute attach one to every failure). For a program that reports only a
+    traceback, its last exception line (``ValueError: ...``, not the notes some
+    libraries print after it), else its last line.
+    """
+    message = getattr(error, "message", None)
+    if message and message.strip():
+        return message.strip().splitlines()[0].strip()
+    text = traceback_text or ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in reversed(lines):
+        if _EXCEPTION_LINE.match(line):
+            return line
+    return lines[-1] if lines else "the calculation failed"
 
 
 class FunctionEvaluator:
@@ -106,6 +131,7 @@ class FunctionEvaluator:
                         positions=x,
                         success=False,
                         error=f"{type(exc).__name__}: {exc}",
+                        traceback=traceback.format_exc(),
                         program=self.name,
                     )
                 )
@@ -255,7 +281,8 @@ class AxtbEvaluator:
             return Answer(
                 positions=x,
                 success=False,
-                error=f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                error=f"{type(exc).__name__}: {exc}",
+                traceback=traceback.format_exc(),
                 program="axtb",
                 program_version=self.version,
             )
@@ -351,11 +378,12 @@ def _compute_answer(r: Request, out: Any) -> Answer:
     program = getattr(prov, "program", None)
     version = getattr(prov, "program_version", None)
     if not getattr(out, "success", False):
-        error = getattr(out, "traceback", None) or "the calculation failed"
+        tb = getattr(out, "traceback", None)
         return Answer(
             positions=x,
             success=False,
-            error=error,
+            error=summary(getattr(out, "error", None), tb),
+            traceback=tb,
             output=out,
             program=program,
             program_version=version,
@@ -431,6 +459,19 @@ class RoutingEvaluator:
                 return False
         return True
 
+    def forget(self, task: int) -> None:
+        """Pass on that a task has finished."""
+        forget = getattr(self.evaluators[self.choice[task]], "forget", None)
+        if forget is not None:
+            forget(task)
+
+    def close(self) -> None:
+        """Close the evaluators that hold something open (program sessions)."""
+        for ev in self.evaluators:
+            close = getattr(ev, "close", None)
+            if close is not None:
+                close()
+
     def __call__(self, requests: Sequence[Request]) -> list[Answer]:
         """Split by evaluator, compute, and merge back in order."""
         groups: dict[int, list[int]] = defaultdict(list)
@@ -444,21 +485,68 @@ class RoutingEvaluator:
         return [a for a in answers if a is not None]
 
 
-def default_evaluator(contexts: Sequence[TaskContext]) -> Any:
-    """Axtb in-process for axtb tasks when axtb is installed, qccompute otherwise."""
+def has_sessions(name: str) -> bool:
+    """Whether ``name`` is a registered program with sessions of its own."""
+    from qccompute.program import capabilities_of, find_program
+
+    program = find_program(name)
+    return program is not None and capabilities_of(program).sessions
+
+
+def axtb_in_process(context: TaskContext) -> bool:
+    """Whether a task runs on qcopt's own axtb evaluator.
+
+    Until axtb is a program with sessions, a session over axtb's codec would make every
+    gradient a separate calculation (30x slower on small molecules); qcopt's
+    in-process evaluator keeps one warm-started axtb calculator per task instead.
+    """
+    if not AxtbEvaluator.handles(context) or has_sessions("axtb"):
+        return False
     try:
         import axtb  # noqa: F401
-
-        have_axtb = True
     except ImportError:
-        have_axtb = False
-    use_axtb = [have_axtb and AxtbEvaluator.handles(ctx) for ctx in contexts]
-    if all(use_axtb):
-        return AxtbEvaluator()
-    if not any(use_axtb):
-        return ComputeEvaluator()
+        return False
+    return True
+
+
+def _sessions() -> Any:
+    """Sessions opened through ``qccompute.session``."""
+    import qccompute
+
+    from .program import SessionEvaluator
+
+    return SessionEvaluator(
+        lambda inp, threads, calctypes: qccompute.session(
+            inp, threads=threads, calctypes=calctypes
+        )
+    )
+
+
+def default_evaluator(contexts: Sequence[TaskContext]) -> Any:
+    """What computes each task when no evaluator is given.
+
+    - axtb tasks: axtb in this process (:func:`axtb_in_process`);
+    - tasks whose gradient program has sessions of its own: one session per task and
+      program through ``qccompute.session``, so each step starts from the last (its
+      orbitals, its probe state);
+    - every other task: ``qccompute.compute``, a round's calculations in one call.
+    """
+    makers: dict[str, Callable[[], Any]] = {
+        "axtb": AxtbEvaluator,
+        "sessions": _sessions,
+        "compute": ComputeEvaluator,
+    }
+    kinds = [
+        "axtb"
+        if axtb_in_process(ctx)
+        else "sessions"
+        if has_sessions(ctx.gradient_spec.program)
+        else "compute"
+        for ctx in contexts
+    ]
+    used = [k for k in makers if k in kinds]
+    if len(used) == 1:
+        return makers[used[0]]()
     return RoutingEvaluator(
-        [AxtbEvaluator(), ComputeEvaluator()],
-        [0 if u else 1 for u in use_axtb],
-        contexts,
+        [makers[k]() for k in used], [used.index(k) for k in kinds], contexts
     )

@@ -57,8 +57,8 @@ class TwoLevels:
 
 
 def test_hessian_argument_is_the_program_not_the_starting_hessian():
-    with pytest.raises(TypeError, match="initial_hessian"):
-        qcopt.minimize(_structure(0.3, 0.2), SPEC, hessian="model")
+    with pytest.raises(ValueError, match="names the program computing Hessians"):
+        qcopt.minimize(_structure(0.3, 0.2), SPEC, hessian_program="model")
 
 
 def test_initial_hessian_keyword_reaches_the_helpers():
@@ -66,14 +66,14 @@ def test_initial_hessian_keyword_reaches_the_helpers():
     out = qcopt.minimize(
         _structure(0.3, 0.2),
         SPEC,
-        hessian=True,
-        initial_hessian="model",
+        hessian_program=True,
         evaluator=ev,
-        trust=0.1,
+        hessian={"initial": "model"},
+        trust={"radius": 0.1},
     )
     assert out.success
-    assert out.results.extras["hessian"] == "model"
-    assert out.results.extras["n_hessians"] == 0
+    assert out.resolved.settings["hessian"]["initial"] == "model"
+    assert out.record["n_hessians"] == 0
 
 
 @pytest.mark.parametrize("every", [0, 1])
@@ -82,10 +82,10 @@ def test_lower_level_hessians_keep_the_target_energies(every):
     out = qcopt.find_ts(
         _structure(-0.7, 0.6),
         SPEC,
-        hessian=LOW,
+        hessian_program=LOW,
         evaluator=ev,
-        hessian_every=every,
-        trust=0.1,
+        hessian={"recompute_every": every},
+        trust={"radius": 0.1},
     )
     assert out.success
     assert np.allclose(
@@ -96,9 +96,8 @@ def test_lower_level_hessians_keep_the_target_energies(every):
         assert frame.results.energy == pytest.approx(e)  # never the low-level one
         assert frame.results.provenance.program == "muller-brown"
         assert frame.results.hessian is None  # a low-level Hessian is not the frame's
-    ex = out.results.extras
-    assert ex["n_hessians"] == len(ev.asked["hessian"]) >= 1 + every
-    assert ex["n_gradients"] == len(ev.asked["gradient"])
+    assert out.record["n_hessians"] == len(ev.asked["hessian"]) >= 1 + every
+    assert out.record["n_gradients"] == len(ev.asked["gradient"])
     # A Hessian at a point whose gradient is known does not compute it again.
     seen = {x.tobytes() for x in ev.asked["gradient"]}
     assert len(seen) == len(ev.asked["gradient"])
@@ -106,6 +105,6 @@ def test_lower_level_hessians_keep_the_target_energies(every):
 
 def test_lower_level_hessians_need_an_evaluator_that_computes_them():
     ev = qcopt.FunctionEvaluator(muller_brown)  # gradients only
-    out = qcopt.find_ts(_structure(-0.7, 0.6), SPEC, hessian=LOW, evaluator=ev)
+    out = qcopt.find_ts(_structure(-0.7, 0.6), SPEC, hessian_program=LOW, evaluator=ev)
     assert not out.success
     assert "cannot compute Hessians" in out.traceback

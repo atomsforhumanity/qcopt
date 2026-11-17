@@ -21,7 +21,7 @@ for each round: every job imports them when it starts.
 - `ts_bench.py OPTIMIZER XYZ OUT.json`: one optimization, counted and checked with a fresh
   analytic Hessian (frequencies, energy, final gradient).
 - `run_set.py OUTDIR --xyz-glob ...`: many, in parallel processes (`--task ts|min|irc`,
-  `--extra OPT=JSON`, `--tag OPT=NAME`, `--pairs` for IRC connectivity checks). A run that
+  `--extra OPT=JSON`, in the settings names of the qcopt under test,, `--tag OPT=NAME`, `--pairs` for IRC connectivity checks). A run that
   reaches `--timeout` stops inside its own process and is recorded as failed with the gradients
   and Hessians it used. If the final check (a fresh gradient and Hessian at the result) fails,
   the run keeps its counts and records `check_error`.

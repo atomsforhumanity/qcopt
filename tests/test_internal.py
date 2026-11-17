@@ -174,13 +174,13 @@ def test_minimize_a_complex_in_internals(coordinates):
     out = qcopt.minimize(
         Structure(symbols=sym, geometry=x),
         GFN2,
-        hessian=True,
-        coordinates=coordinates,
-        frequencies=True,
+        hessian_program=True,
+        coordinate_system=coordinates,
+        freq={"check": True},
     )
     assert out.success, out.traceback
-    assert out.results.extras["coordinates"] == coordinates
-    assert out.results.extras["n_imaginary"] == 0
+    assert out.record["coordinate_system"] == coordinates
+    assert out.record["n_imaginary"] == 0
 
 
 @pytest.mark.axtb
@@ -195,20 +195,20 @@ def test_saddle_escape():
     flat = qcopt.minimize(
         Structure(symbols=sym, geometry=x),
         GFN2,
-        coordinates="cartesian",
-        frequencies=True,
+        coordinate_system="cartesian",
+        freq={"check": True},
     )
-    assert flat.results.extras["n_imaginary"] == 1
+    assert flat.record["n_imaginary"] == 1
     out = qcopt.minimize(
         Structure(symbols=sym, geometry=x),
         GFN2,
-        coordinates="cartesian",
-        escape_saddles=2,
-        frequencies=True,
+        coordinate_system="cartesian",
+        escape={"attempts": 2},
+        freq={"check": True},
     )
     assert out.success
-    assert out.results.extras["n_imaginary"] == 0
-    assert out.results.extras["saddle_escapes"] == 1
+    assert out.record["n_imaginary"] == 0
+    assert out.record["saddle_escapes"] == 1
     assert out.results.final_energy < flat.results.final_energy
 
 
@@ -238,7 +238,12 @@ def test_tric_ts_search_does_not_climb_overall_rotation():
     s = Structure.open(Path(__file__).parent / "data" / "rqm_rxn_0000006257_ts.xyz")
     gxtb = {"program": "axtb", "model": {"method": "gxtb-v2.0.1"}}
     out = qcopt.find_ts(
-        s, gxtb, hessian=True, coordinates="tric", maxiter=150, frequencies=True
+        s,
+        gxtb,
+        hessian_program=True,
+        coordinate_system="tric",
+        convergence={"max_iter": 150},
+        freq={"check": True},
     )
     assert out.success, out.traceback
-    assert out.results.extras["n_imaginary"] == 1
+    assert out.record["n_imaginary"] == 1

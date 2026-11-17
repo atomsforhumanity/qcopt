@@ -1,10 +1,12 @@
+"""qcopt run by qccompute, with axtb children."""
+
 import numpy as np
 import pytest
+import qccompute
 from qcdata import OptimizationData, PathData, ProgramInput, ProgramSpec, Structure
 
 import qcopt
 
-qccompute = pytest.importorskip("qccompute")
 pytest.importorskip("axtb")
 
 ANG = 1.8897261259077824
@@ -15,26 +17,29 @@ GUESS = Structure(
 SPEC = {"program": "axtb", "model": {"method": "gfn2"}}
 
 
-def _input(calctype, structure=GUESS, **keywords):
+def _input(calctype, structure=GUESS, hessians=True, **keywords):
+    subprograms = [ProgramSpec(calctype="gradient", **SPEC)]
+    if hessians:
+        subprograms.append(ProgramSpec(calctype="hessian", **SPEC))
     return ProgramInput(
         program="qcopt",
         calctype=calctype,
         structure=structure,
         keywords=keywords,
-        subprograms=[
-            ProgramSpec(calctype="gradient", **SPEC),
-            ProgramSpec(calctype="hessian", **SPEC),
-        ],
+        subprograms=subprograms,
     )
 
 
 def test_transition_state_and_irc_through_qccompute():
-    ts = qccompute.compute(_input("transition_state", frequencies=True))
+    ts = qccompute.compute(_input("transition_state", freq={"check": True}))
     assert ts.success
     assert isinstance(ts.results, OptimizationData)
     assert ts.results.provenance.program == "qcopt"
-    assert ts.results.extras["n_imaginary"] == 1
-    irc = qccompute.compute(_input("irc", ts.results.final_structure, step_size=0.3))
+    assert ts.record["n_imaginary"] == 1
+    assert ts.resolved.settings["freq"]["check"] is True
+    irc = qccompute.compute(
+        _input("irc", ts.results.final_structure, irc={"step": 0.3})
+    )
     assert irc.success
     assert isinstance(irc.results, PathData)
     assert irc.results.ts_index is not None
@@ -47,6 +52,11 @@ def test_bad_keywords_fail_in_qccompute():
 
 
 def test_children_through_qccompute():
-    out = qcopt.run(_input("optimization"), evaluator=qcopt.ComputeEvaluator())
+    # gradients only: axtb 0.1.0's codec Hessians do not validate under qcdata 0.24
+    # (they carry the removed freqs_wavenumber fields); Hessians through qccompute are
+    # tested again once axtb's codec, or its sessions, write vibrational_analysis
+    out = qcopt.run(
+        _input("optimization", hessians=False), evaluator=qcopt.ComputeEvaluator()
+    )
     assert out.success
     assert out.results.frames[-1].results.provenance.program == "axtb"

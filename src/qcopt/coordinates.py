@@ -1,6 +1,6 @@
 """The coordinate systems an optimizer steps in: Cartesian or delocalized internal.
 
-Both offer the same operations, so :func:`qcopt.algorithms.optimize` runs one loop:
+Both offer the same operations, so :func:`qcopt.algorithms.optimize` runs one loop
 gradients and Hessians into the coordinates, the eigen-decomposition the step is
 computed from, a step back to Cartesians, and how a step is measured against the
 trust radius.
@@ -217,10 +217,15 @@ def make_coordinates(
     frozen: Sequence[int],
     atomic_trust: bool,
 ) -> CartesianCoordinates | InternalCoordinates:
-    """Internal coordinates when asked for and possible, else Cartesians."""
-    if kind in ("tric", "dlc") and not frozen and len(symbols) > 2:
+    """The coordinate system ``kind``: internal ones when possible, else Cartesians.
+
+    ``auto`` means TRIC. Internal coordinates need three or more atoms and no frozen
+    atoms, and fall back to Cartesians when the structure cannot be described (such
+    as coincident atoms).
+    """
+    if kind in ("auto", "tric", "dlc") and not frozen and len(symbols) > 2:
         try:
-            return InternalCoordinates(symbols, x, tric=kind == "tric")
+            return InternalCoordinates(symbols, x, tric=kind != "dlc")
         except (CoordinateError, np.linalg.LinAlgError):  # e.g. coincident atoms
             pass
     return CartesianCoordinates(len(symbols), frozen, atomic_trust)

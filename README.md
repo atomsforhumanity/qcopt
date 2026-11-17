@@ -14,21 +14,28 @@ from qcdata import Structure
 gxtb = {"program": "axtb", "model": {"method": "gxtb-v2.0.1"}, "keywords": {"accuracy": 0.01}}
 guess = Structure.open("ts_guess.xyz")
 
-ts = qcopt.find_ts(guess, gxtb, hessian=True, frequencies=True)  # ProgramOutput
-ts.results.extras["n_imaginary"]                                   # 1
-path = qcopt.irc(ts.results.final_structure, gxtb, hessian=True)   # ProgramOutput (PathData)
+ts = qcopt.find_ts(guess, gxtb, hessian_program=True, freq={"check": True})
+ts.success                                        # True: one imaginary mode
+path = qcopt.irc(ts, gxtb, hessian_program=True,  # from the search: its TS Hessian
+                 ends={"minimize": True})         # ProgramOutput holding PathData
 ```
 
-`hessian` names the program computing Hessians: `True` for the gradient program, or another
-one, often a cheaper method. Frames keep the gradient program's energies and gradients:
+`irc` starts from a structure, or from `find_ts`'s output: then it reuses the transition
+state's Hessian (computed by `freq.check`) when it would compute the same one, and computes
+only the gradient there. Any calculation can start from a Hessian already known at its
+structure, from any program (`given=` a frame's `results`; `ProgramInput.given`):
+
+```python
+start = qcopt.find_ts(guess, gxtb, given=gfn2_frame.results)  # a GFN2 starting Hessian
+```
+
+`hessian_program` names the program computing Hessians: `True` for the gradient program, or
+another one, often a cheaper method. Frames keep the gradient program's energies and gradients:
 
 ```python
 gfn2 = {"program": "axtb", "model": {"method": "gfn2"}, "keywords": {"accuracy": 0.01}}
-ts = qcopt.find_ts(guess, gxtb, hessian=gfn2)   # g-xTB saddle from a GFN2 starting Hessian
+ts = qcopt.find_ts(guess, gxtb, hessian_program=gfn2)   # g-xTB saddle, GFN2 starting Hessian
 ```
-
-Keyword arguments are qcopt's keywords (`qcopt.keywords`), such as `maxiter`,
-`initial_hessian` (`"model"`, `"exact"`, ...) or `hessian_every`.
 
 Or as a qcdata input, alone or many at once (they advance together, and each round's
 gradients from all of them are computed in one call):
@@ -40,7 +47,7 @@ inp = ProgramInput(
     program="qcopt",
     calctype="transition_state",
     structure=guess,
-    keywords={"maxiter": 300},
+    keywords={"convergence": {"max_iter": 300}},
     subprograms=[
         ProgramSpec(program="axtb", calctype="gradient", model={"method": "gxtb-v2.0.1"},
                     keywords={"accuracy": 0.01}),
@@ -51,24 +58,84 @@ inp = ProgramInput(
 out = qcopt.run(inp)            # or qcopt.run([inp1, inp2, ...])
 ```
 
+qcopt is also a program qccompute runs: `qccompute.compute(inp)`. As
+an AFH program (`qccompute.programs`), qcopt then computes its gradients and Hessians through
+sessions of the child programs, one per calculation and program, warm-started from
+geometry to geometry. `qcopt.run`, `minimize`, `find_ts` and `irc` do the same for a
+program with sessions of its own (`qccompute.session`); axtb runs in this process, and
+every other program through `qccompute.compute`.
+
+## Settings
+
+Settings come in groups. A group is a dict (or its model, such as
+`qcopt.ConvergenceSettings`), passed as a keyword argument or under `keywords`:
+
+```python
+qcopt.minimize(s, gxtb, convergence={"g_tol": 1e-5, "max_iter": 200},
+               constraints={"frozen": [0, 1], "distance": [[2, 3, 2.9]]})
+qcopt.find_ts(s, gxtb, hessian_program=gfn2, hessian={"recompute_every": 5},
+              mode={"guide": tangent}, coordinate_system="cartesian")
+qcopt.irc(ts, gxtb, hessian_program=True, irc={"step": 0.2}, ends={"minimize": True})
+```
+
+The common settings (`qcopt.default_options(calctype)` lists every one with its default;
+[docs/settings.md](docs/settings.md) documents them, units included):
+
+| group | settings | calculation types |
+|---|---|---|
+| `coordinate_system` | `auto` (TRIC; Cartesians with frozen atoms), `tric`, `dlc`, `cartesian` | min, TS |
+| `convergence` | `max_iter`, `g_tol` (largest atomic gradient, Eh/bohr), `g_rms_tol`, `d_tol`, `e_tol` | all (IRC: per branch) |
+| `trust` | `radius`, `min`, `max` (bohr) | min, TS |
+| `hessian` | `initial` (`auto`, `exact`, `model`, ...), `update`, `recompute_every`, `step` | all |
+| `constraints` | `frozen`, `distance`, `angle`, `dihedral` (degrees) | min, TS (IRC: `frozen`) |
+| `mode` | `guide` (a direction to climb), `follow` | TS |
+| `freq` | `check` (frequencies at the end decide), `imaginary_cutoff` (cm⁻¹) | min, TS |
+| `escape` | `attempts`, `step`: step off saddle points a minimization stops on | min |
+| `irc` | `direction`, `step` (bohr amu^1/2), `method` (`gs2`, `lqa`) | IRC |
+| `ends` | `minimize` (the IRC's ends), `coordinate_system`, `max_iter`, `g_tol` | IRC |
+
+The rules, shared with AFH's other programs (axtb, linus):
+
+- Atomic units (bohr, Hartree) unless a setting says otherwise.
+- `"auto"` means qcopt decides, and every result records what it decided and why.
+- A misspelled or unknown setting is an error that says what was meant. So is a setting
+  of another calculation type, and one given that cannot affect the calculation (such as
+  `escape.step` without `escape.attempts`): you always know what is computed. Settings
+  that act only if a condition arises during the run are allowed.
+- `qcopt.options_schema(calctype)` is the JSON Schema of each calculation type's settings.
+
+[docs/choosing-settings.md](docs/choosing-settings.md) has the benchmark evidence behind
+the defaults and when to change them.
+
+## Results
+
+A `ProgramOutput` holding `OptimizationData` (minima, transition states) or `PathData`
+(IRCs). Every frame is a qcdata `Frame` with the energy and gradient computed there. A run
+that fails or does not converge has `success=False` and keeps its frames. The output's
+standard slots, the same in every AFH program:
+
+- `resolved`: `settings`, the settings with every `auto` replaced (pass them back as
+  `keywords` to reproduce the run), and `reasons`;
+- `record`: what happened: gradients and Hessians computed, coordinate rebuilds, rejected
+  steps, IRC branch ends, the step log;
+- `error`, on failure: `kind` (`input`, `program`: a gradient or Hessian calculation
+  failed, with its `program` and its own error as `cause`, and a message that starts
+  with the program and calculation type, `axtb (gradient): ...`; `convergence`, with
+  `code` such as `max_iter` or `not_first_order_saddle`; `numerical`; `internal`),
+  `message` and `code`. `traceback` holds the message, then the failed calculation's
+  own traceback;
+- `execution.timings`: `evaluator` (in the gradient and Hessian programs), `optimizer`
+  (qcopt's own), `total`.
+
 ## What it does
 
 | Calculation | Method |
 |---|---|
 | `optimization` | RS-RFO in TRIC coordinates (Wang and Song, 2016: each molecule's internal coordinates plus its translation and rotation), or delocalized internals, or Cartesians; Lindh model Hessian or the program's exact one; BFGS updates (Bofill while the Hessian is indefinite); optional frequency check that steps off saddle points |
-| `transition_state` | RS-P-RFO climbing the lowest mode (or, in Cartesians, one following a guide direction); exact (or a cheaper method's) or finite-difference starting Hessian; TS-BFGS updates; recomputed when the negative mode is lost; fails when it ends without negative curvature (pass `frequencies=True` for a check by the exact Hessian's frequencies) |
-| `irc` | Mass-weighted steepest descent by Gonzalez-Schlegel steps (or the local quadratic approximation), both branches together, frames in the input's frame; overshoots retried at half the step; optionally both ends minimized together (`minimize_ends`) |
+| `transition_state` | RS-P-RFO climbing the lowest mode (or, in Cartesians, one following a guide direction); exact (or a cheaper method's) or finite-difference starting Hessian; TS-BFGS updates; recomputed when the negative mode is lost; fails when it ends without negative curvature |
+| `irc` | Mass-weighted steepest descent by Gonzalez-Schlegel steps (or the local quadratic approximation), both branches together, frames in the input's frame; overshoots retried at half the step; optionally both ends minimized together |
 
-Distances, angles and dihedrals can be held at target values (`constraints`), atoms
-frozen (`frozen_atoms`). Every frame is a qcdata `Frame` with the energy and gradient
-computed there.
-
-With qccompute installed, qcopt is also a program it runs:
-
-```python
-from qccompute import compute
-out = compute(inp)   # the ProgramInput above
-```
+How it is built, and where to extend it: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Benchmarks
 
@@ -78,9 +145,8 @@ gradients; results are summarized in AFH's findings.
 ## Install
 
 ```sh
+pip install qcopt               # any program qccompute runs, or your own gradient function
 pip install "qcopt[axtb]"       # with axtb: in-process g-xTB and GFN2-xTB, analytic Hessians
-pip install "qcopt[qccompute]"  # any program qccompute runs
-pip install qcopt               # your own gradient function
 ```
 
 [axtb](https://github.com/atomsforhumanity/axtb) 0.1.0 or newer. Its wheels are for x86-64

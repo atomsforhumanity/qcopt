@@ -23,19 +23,21 @@ HCN_TS_GUESS = Structure(
 
 
 def test_water_minimum_in_process():
-    out = qcopt.minimize(WATER, GFN2, frequencies=True, hessian=True)
+    out = qcopt.minimize(WATER, GFN2, hessian_program=True, freq={"check": True})
     assert out.success, out.traceback
-    assert out.results.extras["n_imaginary"] == 0
+    assert out.record["n_imaginary"] == 0
     f = out.results.frames[-1]
     assert f.results.provenance.program == "axtb"
     assert np.abs(f.results.gradient).max() < 2e-5
 
 
 def test_hcn_isomerization_ts_and_irc():
-    ts = qcopt.find_ts(HCN_TS_GUESS, GFN2, hessian=True, frequencies=True)
+    ts = qcopt.find_ts(HCN_TS_GUESS, GFN2, hessian_program=True, freq={"check": True})
     assert ts.success, ts.traceback
-    assert ts.results.extras["n_imaginary"] == 1
-    path = qcopt.irc(ts.results.final_structure, GFN2, hessian=True, step_size=0.15)
+    assert ts.record["n_imaginary"] == 1
+    path = qcopt.irc(
+        ts.results.final_structure, GFN2, hessian_program=True, irc={"step": 0.15}
+    )
     assert path.success, path.traceback
     ends = [
         path.results.frames[0].structure.geometry,
@@ -90,10 +92,11 @@ GXTB = {
 
 def test_gxtb_ts_from_gfn2_hessians():
     """g-xTB gradients with GFN2 Hessians: frames hold g-xTB energies throughout."""
-    ts = qcopt.find_ts(HCN_TS_GUESS, GXTB, hessian=GFN2, hessian_every=2)
+    ts = qcopt.find_ts(
+        HCN_TS_GUESS, GXTB, hessian_program=GFN2, hessian={"recompute_every": 2}
+    )
     assert ts.success, ts.traceback
-    ex = ts.results.extras
-    assert ex["n_hessians"] >= 2
+    assert ts.record["n_hessians"] >= 2
     check = axtb.Calculator(
         "gxtb-v2.0.1", [6, 7, 1], ts.results.frames[0].structure.geometry, accuracy=0.01
     )

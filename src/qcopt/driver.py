@@ -10,7 +10,9 @@ finite-difference Hessian are computed together (batched, or side by side).
 
 from __future__ import annotations
 
-from collections.abc import Generator, Sequence
+import time
+import traceback
+from collections.abc import Generator, Hashable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Protocol
 
@@ -29,10 +31,14 @@ class Ask:
         kind: ``gradient`` (energy and gradient) or ``hessian`` (energy, gradient,
             and Hessian).
         positions: ``(n_atoms, 3)`` geometry in bohr.
+        lineage: Which earlier calculations of the task this one continues (an IRC
+            branch's name), so a program can start from the wavefunction at the
+            previous geometry of the same line; None: the task's main line.
     """
 
     kind: Kind
     positions: Array
+    lineage: Hashable | None = None
 
 
 @dataclass
@@ -45,9 +51,18 @@ class Answer:
         gradient: ``(n_atoms, 3)`` gradient (Hartree/bohr).
         hessian: ``(3N, 3N)`` Hessian (Hartree/bohr^2) for Hessian asks.
         success: Whether the calculation succeeded.
-        error: Why it failed.
+        error: Why it failed, in one line: the program's own message.
+        error_kind: The failure's kind when the evaluator or the driver knows it and
+            the output does not carry the program's own error (``numerical`` for a
+            non-finite result); None: ``internal``.
+        calctype: For a failure, the calculation that failed (``gradient`` or
+            ``hessian``): a Hessian paired with a separate program's gradient fails
+            in either.
+        traceback: The failure's traceback or log, when there is one.
         output: The evaluator's record of the calculation (a qcdata
-            ``ProgramOutput`` or the program's raw result), used to build frames.
+            ``ProgramOutput``, a session's ``Frame``, the program's raw result, or a
+            ``qcdata.ErrorInfo``), used to build frames; its ``error`` is the
+            program's own.
         program: The program that computed it.
         program_version: Its version.
         n_gradients: Gradient calculations this answer took, as the driver counts
@@ -66,6 +81,9 @@ class Answer:
     hessian: Array | None = None
     success: bool = True
     error: str | None = None
+    error_kind: str | None = None
+    calctype: str | None = None
+    traceback: str | None = None
     output: Any = None
     program: str | None = None
     program_version: str | None = None
@@ -84,12 +102,18 @@ class Request:
         kind: ``gradient`` or ``hessian``.
         positions: Geometry in bohr.
         context: The task's :class:`TaskContext`.
+        lineage: The ask's lineage (:class:`Ask`).
+        commit: Whether the calculation becomes its lineage's history. The displaced
+            gradients of a finite-difference Hessian do not: each starts from the
+            centre's, as if it were the lineage's last.
     """
 
     task: int
     kind: Kind
     positions: Array
     context: TaskContext
+    lineage: Hashable | None = None
+    commit: bool = True
 
 
 @dataclass
@@ -131,7 +155,8 @@ class Evaluator(Protocol):
 
         An evaluator may also define ``hessian_includes_gradient(context)``; when it
         returns False, each Hessian is paired with a gradient computed (or just
-        computed) by the gradient program.
+        computed) by the gradient program. It may define ``forget(task)``, called
+        when a task's algorithm has finished, to release what it kept for the task.
         """
         ...
 
@@ -155,12 +180,12 @@ def _fd_hessian(
 ) -> Answer:
     n = x.size
     failed = [a for a in [*([center] if center else []), *answers] if not a.success]
-    if failed:
-        return Answer(
+    if failed:  # the first failed gradient, as the Hessian's failure
+        return replace(
+            failed[0],
             positions=x,
-            success=False,
-            error=f"finite-difference Hessian: {failed[0].error}",
             n_gradients=len(answers) + (1 if center else 0),
+            hessian_answer=None,
         )
     hess = np.zeros((n, n))
     for i in range(n):
@@ -188,7 +213,7 @@ def _finite(request: Request, answer: Answer, hessian_only: bool) -> Answer:
     the gradient program; every other answer needs a finite energy and gradient.
     """
     if not answer.success:
-        return answer
+        return replace(answer, calctype=request.kind)
     needed: list[tuple[str, Any]] = []
     if not hessian_only:
         needed += [("energy", answer.energy), ("gradient", answer.gradient)]
@@ -196,9 +221,20 @@ def _finite(request: Request, answer: Answer, hessian_only: bool) -> Answer:
         needed.append(("Hessian", answer.hessian))
     for what, value in needed:
         if value is None:
-            return replace(answer, success=False, error=f"no {what} computed")
+            return replace(
+                answer,
+                success=False,
+                error=f"no {what} computed",
+                calctype=request.kind,
+            )
         if not np.all(np.isfinite(np.asarray(value, dtype=float))):
-            return replace(answer, success=False, error=f"non-finite {what}")
+            return replace(
+                answer,
+                success=False,
+                error=f"non-finite {what}",
+                error_kind="numerical",
+                calctype=request.kind,
+            )
     return answer
 
 
@@ -217,17 +253,10 @@ def _remember(cache: dict[bytes, Answer], x: Array, answer: Answer) -> None:
 
 def _combine(grad: Answer, hess: Answer, x: Array, fresh: bool) -> Answer:
     """The gradient program's answer with the separate Hessian program's Hessian."""
-    for part, what in ((grad, "gradient"), (hess, "Hessian")):
-        if not part.success:
-            return Answer(
-                positions=x,
-                success=False,
-                error=f"{what} failed: {part.error}",
-                output=part.output,
-                program=part.program,
-                program_version=part.program_version,
-                n_gradients=int(fresh),
-                hessian_answer=hess,
+    for part in (grad, hess):
+        if not part.success:  # the failed calculation, as the pair's failure
+            return replace(
+                part, positions=x, n_gradients=int(fresh), hessian_answer=hess
             )
     return Answer(
         positions=x,
@@ -242,10 +271,214 @@ def _combine(grad: Answer, hess: Answer, x: Array, fresh: bool) -> Answer:
     )
 
 
+class _Plan:
+    """How one ask is computed: the requests it adds to the round, and its reply.
+
+    Subclasses: :class:`_Direct` (the evaluator computes it as asked),
+    :class:`_Paired` (a Hessian from a separate program, with the gradient
+    program's energy and gradient), :class:`_FiniteDifference` (a Hessian from
+    displaced gradients), :class:`_Unsupported`.
+    """
+
+    def __init__(self, ask: Ask, x: Array) -> None:
+        """Bind the ask and its geometry."""
+        self.ask = ask
+        self.x = x
+
+    def reply(self, answers: list[Answer], recent: dict[bytes, Answer]) -> Answer:
+        """The answer for the algorithm, from this round's answers."""
+        raise NotImplementedError
+
+
+class _Direct(_Plan):
+    def __init__(self, ask: Ask, x: Array, index: int) -> None:
+        super().__init__(ask, x)
+        self.index = index
+
+    def reply(self, answers: list[Answer], recent: dict[bytes, Answer]) -> Answer:
+        reply = answers[self.index]
+        if self.ask.kind == "gradient" and reply.success:
+            _remember(recent, self.x, reply)
+        hess = int(self.ask.kind == "hessian")
+        return replace(reply, n_gradients=1 - hess, n_hessians=hess)
+
+
+class _Paired(_Plan):
+    """A separate program's Hessian with the gradient program's energy and gradient.
+
+    The gradient is computed alongside, unless the task computed it at this
+    geometry just before (``known``).
+    """
+
+    def __init__(
+        self, ask: Ask, x: Array, gradient: int | Answer, hessian: int
+    ) -> None:
+        super().__init__(ask, x)
+        self.gradient = gradient
+        self.hessian = hessian
+
+    def reply(self, answers: list[Answer], recent: dict[bytes, Answer]) -> Answer:
+        fresh = isinstance(self.gradient, int)
+        grad = (
+            answers[self.gradient] if isinstance(self.gradient, int) else self.gradient
+        )
+        if fresh and grad.success:
+            _remember(recent, self.x, grad)
+        reply = _combine(grad, answers[self.hessian], self.x, fresh)
+        return replace(reply, n_gradients=int(fresh), n_hessians=1)
+
+
+class _FiniteDifference(_Plan):
+    """A Hessian from central differences of gradients, with the center's gradient."""
+
+    def __init__(self, ask: Ask, x: Array, start: int, stop: int, step: float) -> None:
+        super().__init__(ask, x)
+        self.start, self.stop, self.step = start, stop, step
+
+    def reply(self, answers: list[Answer], recent: dict[bytes, Answer]) -> Answer:
+        center = answers[self.start]
+        reply = _fd_hessian(
+            center, answers[self.start + 1 : self.stop], self.x, self.step
+        )
+        return replace(
+            reply, n_gradients=self.stop - self.start, n_hessians=int(reply.success)
+        )
+
+
+class _Unsupported(_Plan):
+    def reply(self, answers: list[Answer], recent: dict[bytes, Answer]) -> Answer:
+        return Answer(
+            positions=self.x,
+            success=False,
+            error=(
+                "the evaluator cannot compute Hessians with the Hessian subprogram, "
+                "which differs from the gradient one"
+            ),
+            error_kind="unsupported",
+            calctype="hessian",
+            n_gradients=0,
+        )
+
+
+@dataclass
+class _Round:
+    """One round's requests for the evaluator, and each task's plans."""
+
+    requests: list[Request] = field(default_factory=list)
+    plans: dict[int, list[_Plan]] = field(default_factory=dict)
+    hessian_only: set[int] = field(default_factory=set)  # Hessian halves of pairs
+
+    def add(self, request: Request) -> int:
+        """Append a request; returns its index."""
+        self.requests.append(request)
+        return len(self.requests) - 1
+
+
+class _Strategy:
+    """For each task: how its Hessians are computed by this evaluator."""
+
+    def __init__(self, evaluator: Evaluator, contexts: Sequence[TaskContext]) -> None:
+        self.contexts = list(contexts)
+        self.direct = [evaluator.supports_hessian(ctx) for ctx in contexts]
+        # A Hessian is paired with the gradient program's energy and gradient when it
+        # comes from another program, or when the evaluator's Hessians come without
+        # them.
+        self.paired = [
+            ctx.separate_hessian or (d and not _hessian_brings_gradient(evaluator, ctx))
+            for ctx, d in zip(contexts, self.direct, strict=True)
+        ]
+
+    def plan(
+        self, rnd: _Round, task: int, ask: Ask, recent: dict[bytes, Answer]
+    ) -> _Plan:
+        """Add the requests for one ask to the round; returns its plan."""
+        ctx = self.contexts[task]
+        x = np.asarray(ask.positions, dtype=float).reshape(-1, 3)
+        if ask.kind == "hessian" and self.paired[task]:
+            if not self.direct[task]:
+                return _Unsupported(ask, x)
+            known = recent.get(x.tobytes())
+            line = ask.lineage
+            gradient: int | Answer = (
+                rnd.add(Request(task, "gradient", x, ctx, line))
+                if known is None
+                else known
+            )
+            rnd.hessian_only.add(len(rnd.requests))
+            hessian = rnd.add(Request(task, "hessian", x, ctx, line))
+            return _Paired(ask, x, gradient, hessian)
+        if ask.kind == "hessian" and not self.direct[task]:
+            start = rnd.add(Request(task, "gradient", x, ctx, ask.lineage))
+            for y in _fd_points(x, ctx.fd_step):
+                rnd.add(Request(task, "gradient", y, ctx, ask.lineage, commit=False))
+            return _FiniteDifference(ask, x, start, len(rnd.requests), ctx.fd_step)
+        return _Direct(ask, x, rnd.add(Request(task, ask.kind, x, ctx, ask.lineage)))
+
+
+def _evaluate(
+    evaluator: Evaluator, rnd: _Round, timings: dict[str, float] | None
+) -> tuple[list[Answer], bool]:
+    """The round's answers, checked; True when the evaluator itself failed."""
+    t0 = time.perf_counter()
+    crashed = False
+    requests = rnd.requests
+    try:
+        answers = list(evaluator(requests)) if requests else []
+        if len(answers) != len(requests):
+            raise RuntimeError(f"{len(answers)} answers for {len(requests)} requests")
+    except Exception as exc:  # noqa: BLE001 - every request of the round failed
+        crashed = True
+        error = f"{type(exc).__name__}: {exc}"
+        tb = "".join(traceback.format_exception(exc))
+        # a ProgramError's own error is the cause; any other exception is a bug
+        own = getattr(exc, "error", None)
+        answers = [
+            Answer(
+                positions=r.positions,
+                success=False,
+                error=error,
+                traceback=tb,
+                output=own,
+            )
+            for r in requests
+        ]
+    if timings is not None:
+        timings["evaluator"] = timings.get("evaluator", 0.0) + (
+            time.perf_counter() - t0
+        )
+    answers = [
+        _finite(r, a, k in rnd.hessian_only)
+        for k, (r, a) in enumerate(zip(requests, answers, strict=True))
+    ]
+    return answers, crashed
+
+
+def _start(alg: Algorithm) -> tuple[list[Ask] | None, Any]:
+    """Prime an algorithm: its first asks, or (None, its result)."""
+    try:
+        return next(alg), None
+    except StopIteration as stop:
+        return None, stop.value
+    except Exception as exc:  # noqa: BLE001 - reported as the task's result
+        return None, exc
+
+
+def _send(alg: Algorithm, replies: list[Answer]) -> tuple[list[Ask] | None, Any]:
+    """Answer an algorithm's asks: its next asks, or (None, its result)."""
+    try:
+        return alg.send(replies), None
+    except StopIteration as stop:
+        return None, stop.value
+    except Exception as exc:  # noqa: BLE001 - reported as the task's result
+        return None, exc
+
+
 def drive(
     algorithms: Sequence[Algorithm],
     contexts: Sequence[TaskContext],
     evaluator: Evaluator,
+    *,
+    timings: dict[str, float] | None = None,
 ) -> list[Any]:
     """Run algorithms to completion, computing each round's asks in one call.
 
@@ -253,6 +486,8 @@ def drive(
         algorithms: Started (not yet primed) generators.
         contexts: The task context of each algorithm.
         evaluator: Computes the requests.
+        timings: If given, ``timings["evaluator"]`` accumulates the seconds spent in
+            the evaluator.
 
     Returns:
         Each algorithm's return value, in order. An algorithm that raises has the
@@ -261,118 +496,34 @@ def drive(
     results: list[Any] = [None] * len(algorithms)
     pending: dict[int, list[Ask]] = {}
     for i, alg in enumerate(algorithms):
-        try:
-            pending[i] = next(alg)
-        except StopIteration as stop:
-            results[i] = stop.value
-        except Exception as exc:  # noqa: BLE001 - reported as the task's result
-            results[i] = exc
-    direct = [evaluator.supports_hessian(ctx) for ctx in contexts]
-    # A Hessian is paired with the gradient program's energy and gradient when it
-    # comes from another program, or when the evaluator's Hessians come without them.
-    split = [
-        ctx.separate_hessian or (d and not _hessian_brings_gradient(evaluator, ctx))
-        for ctx, d in zip(contexts, direct, strict=True)
-    ]
+        asks, results[i] = _start(alg)
+        if asks is not None:
+            pending[i] = asks
+    strategy = _Strategy(evaluator, contexts)
     # Each task's latest gradient answers by geometry, so a Hessian from a separate
     # program at a point just computed does not compute its gradient again.
     recent: list[dict[bytes, Answer]] = [{} for _ in algorithms]
     while pending:
-        requests: list[Request] = []
-        plans: dict[int, list[tuple[str, int, int, Ask]]] = {}
-        reused: dict[tuple[int, int], Answer] = {}
-        hessian_only: set[int] = set()  # request indices of Hessian halves of pairs
+        rnd = _Round()
         for i, asks in pending.items():
-            ctx = contexts[i]
-            plan = []
-            for ask in asks:
-                x = np.asarray(ask.positions, dtype=float).reshape(-1, 3)
-                start = len(requests)
-                if ask.kind == "hessian" and split[i]:
-                    if not direct[i]:
-                        plan.append(("unsupported", start, start, ask))
-                        continue
-                    known = recent[i].get(x.tobytes())
-                    if known is None:
-                        requests.append(Request(i, "gradient", x, ctx))
-                    else:
-                        reused[(i, start)] = known
-                    hessian_only.add(len(requests))
-                    requests.append(Request(i, "hessian", x, ctx))
-                    plan.append(("split", start, len(requests), ask))
-                elif ask.kind == "hessian" and not direct[i]:
-                    requests.append(Request(i, "gradient", x, ctx))
-                    for y in _fd_points(x, ctx.fd_step):
-                        requests.append(Request(i, "gradient", y, ctx))
-                    plan.append(("fd", start, len(requests), ask))
-                else:
-                    requests.append(Request(i, ask.kind, x, ctx))
-                    plan.append(("direct", start, len(requests), ask))
-            plans[i] = plan
-        crashed = False
-        try:
-            answers = list(evaluator(requests)) if requests else []
-            if len(answers) != len(requests):
-                raise RuntimeError(
-                    f"{len(answers)} answers for {len(requests)} requests"
-                )
-        except Exception as exc:  # noqa: BLE001 - every request of the round failed
-            crashed = True
-            error = f"evaluator failed: {type(exc).__name__}: {exc}"
-            answers = [
-                Answer(positions=r.positions, success=False, error=error)
-                for r in requests
-            ]
-        answers = [
-            _finite(r, a, k in hessian_only)
-            for k, (r, a) in enumerate(zip(requests, answers, strict=True))
-        ]
+            rnd.plans[i] = [strategy.plan(rnd, i, ask, recent[i]) for ask in asks]
+        answers, crashed = _evaluate(evaluator, rnd, timings)
         nxt: dict[int, list[Ask]] = {}
-        for i, plan in plans.items():
-            replies = []
-            for how, a, b, ask in plan:
-                x = np.asarray(ask.positions, dtype=float).reshape(-1, 3)
-                if how == "direct":
-                    reply = answers[a]
-                    if ask.kind == "gradient" and reply.success:
-                        _remember(recent[i], x, reply)
-                    hess = int(ask.kind == "hessian")
-                    reply = replace(reply, n_gradients=1 - hess, n_hessians=hess)
-                    replies.append(reply)
-                elif how == "split":
-                    fresh = b - a == 2
-                    grad = answers[a] if fresh else reused[(i, a)]
-                    if fresh and grad.success:
-                        _remember(recent[i], x, grad)
-                    reply = _combine(grad, answers[b - 1], x, fresh)
-                    replies.append(replace(reply, n_gradients=int(fresh), n_hessians=1))
-                elif how == "unsupported":
-                    replies.append(
-                        Answer(
-                            positions=x,
-                            success=False,
-                            error=(
-                                "the evaluator cannot compute Hessians with the "
-                                "Hessian subprogram, which differs from the gradient one"
-                            ),
-                            n_gradients=0,
-                        )
-                    )
-                else:
-                    center = answers[a]
-                    reply = _fd_hessian(
-                        center, answers[a + 1 : b], x, contexts[i].fd_step
-                    )
-                    replies.append(
-                        replace(reply, n_gradients=b - a, n_hessians=int(reply.success))
-                    )
+        for i, plans in rnd.plans.items():
+            replies = [plan.reply(answers, recent[i]) for plan in plans]
             if crashed:  # nothing was computed
                 replies = [replace(r, n_gradients=0, n_hessians=0) for r in replies]
-            try:
-                nxt[i] = algorithms[i].send(replies)
-            except StopIteration as stop:
-                results[i] = stop.value
-            except Exception as exc:  # noqa: BLE001
-                results[i] = exc
+            asks, results[i] = _send(algorithms[i], replies)
+            if asks is not None:
+                nxt[i] = asks
+            else:
+                _forget(evaluator, i)
         pending = nxt
     return results
+
+
+def _forget(evaluator: Any, task: int) -> None:
+    """Tell the evaluator a task is finished, if it wants to know."""
+    forget = getattr(evaluator, "forget", None)
+    if forget is not None:
+        forget(task)

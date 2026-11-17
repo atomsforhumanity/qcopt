@@ -48,6 +48,7 @@ class CartesianSpace:
             mask[3 * a : 3 * a + 3] = False
         self.free = mask
         self._locked: Array = np.zeros((3 * n_atoms, 0))
+        self._bases: dict[bytes, Array] = {}  # recent geometries' rigid bases
         self._sqrt_m = (
             np.ones(3 * n_atoms) if masses is None else np.repeat(np.sqrt(masses), 3)
         )
@@ -74,9 +75,22 @@ class CartesianSpace:
     # --------------------------------------------------------------- projection
 
     def at(self, positions: Array) -> CartesianSpace:
-        """Recompute the rigid-motion directions at ``positions``; returns self."""
+        """Recompute the rigid-motion directions at ``positions``; returns self.
+
+        The bases of the last few geometries are kept: an algorithm asks for the same
+        one several times per step (an IRC branch: its step, overshoot and end tests;
+        both branches share the space).
+        """
         if self.project_rigid:
-            self._locked = rigid_basis(positions, self.masses)
+            x = np.asarray(positions, dtype=float)
+            key = x.tobytes()
+            basis = self._bases.pop(key, None)
+            if basis is None:
+                basis = rigid_basis(x, self.masses)
+            self._bases[key] = basis  # most recent last
+            while len(self._bases) > 4:
+                self._bases.pop(next(iter(self._bases)))
+            self._locked = basis
         return self
 
     def project(self, vector: Array) -> Array:

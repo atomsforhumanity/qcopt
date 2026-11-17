@@ -9,6 +9,9 @@ from qcdata import Structure
 
 import qcopt
 import qcopt.algorithms as algorithms
+import qcopt.algorithms.common
+import qcopt.algorithms.optimization as optimize_module
+import qcopt.algorithms.reaction_path
 from qcopt.algorithms import lockstep
 from qcopt.coordinates import InternalCoordinates, make_coordinates
 from qcopt.driver import Answer
@@ -49,16 +52,22 @@ def test_ts_search_started_at_a_minimum_fails():
         out = qcopt.find_ts(
             _mb(MB_MINIMA[1]),
             MB,
-            hessian=True,
+            hessian_program=True,
             evaluator=_ev(),
-            frequencies=frequencies,
+            freq={"check": frequencies},
         )
         assert not out.success
         assert "not a first-order saddle point" in out.traceback
 
 
 def test_ts_search_still_succeeds_at_a_saddle():
-    out = qcopt.find_ts(_mb((-0.7, 0.6)), MB, hessian=True, evaluator=_ev(), trust=0.1)
+    out = qcopt.find_ts(
+        _mb((-0.7, 0.6)),
+        MB,
+        hessian_program=True,
+        evaluator=_ev(),
+        trust={"radius": 0.1},
+    )
     assert out.success, out.traceback
 
 
@@ -74,15 +83,19 @@ def test_nan_gradient_fails_and_keeps_frames():
     assert not out.success
     assert "non-finite gradient" in out.traceback
     assert len(out.results.frames) >= 3
+    # AFH's rule for a child's failure: the child and calctype first, its error the
+    # cause (the program returned it: numerical)
+    assert out.error.message.startswith("function (gradient): non-finite gradient (")
+    assert (out.error.kind, out.error.cause.kind) == ("program", "numerical")
 
 
 def test_an_exception_inside_the_algorithm_keeps_the_frames(monkeypatch):
     def broken(*args, **kwargs):
         raise RuntimeError("frequencies broke")
 
-    monkeypatch.setattr(algorithms, "frequencies", broken)
+    monkeypatch.setattr(optimize_module, "frequencies", broken)
     out = qcopt.minimize(
-        _atom(0.3, 0.2), MB, hessian=True, evaluator=_ev(), frequencies=True
+        _atom(0.3, 0.2), MB, hessian_program=True, evaluator=_ev(), freq={"check": True}
     )
     assert not out.success
     assert "frequencies broke" in out.traceback
@@ -101,8 +114,16 @@ def test_a_failing_evaluator_fails_the_tasks_and_keeps_their_frames():
 
     out = qcopt.minimize(_atom(0.3, 0.2), MB, evaluator=Breaks(muller_brown))
     assert not out.success
-    assert "evaluator failed: RuntimeError: the program crashed" in out.traceback
+    assert "RuntimeError: the program crashed" in out.traceback
     assert len(out.results.frames) == 3  # the three computed before the crash
+    # an evaluator's exception: no program to name, a bug's kind as the cause, and
+    # its traceback under the message
+    assert out.error.message.startswith(
+        "the evaluator (gradient): RuntimeError: the program crashed ("
+    )
+    assert out.error.program is None
+    assert out.error.cause.kind == "internal"
+    assert "Traceback (most recent call last)" in out.traceback
 
 
 def test_a_failed_hessian_for_the_frequencies_fails_the_run():
@@ -113,10 +134,10 @@ def test_a_failed_hessian_for_the_frequencies_fails_the_run():
     out = qcopt.minimize(
         _atom(0.3, 0.2),
         MB,
-        hessian=True,
-        initial_hessian="model",
+        hessian_program=True,
         evaluator=ev,
-        frequencies=True,
+        hessian={"initial": "model"},
+        freq={"check": True},
     )
     assert not out.success
     assert "the Hessian for the frequencies failed" in out.traceback
@@ -126,30 +147,27 @@ def test_saddle_escapes_that_run_out_fail():
     out = qcopt.minimize(
         _mb(MB_SADDLES[1]),
         MB,
-        hessian=True,
+        hessian_program=True,
         evaluator=_ev(),
-        escape_saddles=1,
-        escape_step=1e-7,
+        escape={"attempts": 1, "step": 1e-7},
     )
     assert not out.success
     assert "still a saddle point" in out.traceback
 
 
-def test_saddle_escape_is_skipped_with_constraints():
+def test_saddle_escape_with_constraints_is_an_input_error():
     x = np.array([[2.0, 0, 0], [0, 0, 0], [-1.7, 1.0, 0.0]])
-    out = qcopt.minimize(
-        Structure(symbols=["O", "O", "O"], geometry=x),
-        {"program": "f"},
-        hessian=True,
-        evaluator=qcopt.FunctionEvaluator(
-            triatomic, lambda p: _fd_hessian(triatomic, p)
-        ),
-        escape_saddles=2,
-        constraints={"distance": [[0, 1, 2.3]]},
-    )
-    assert out.success, out.traceback
-    assert "saddle_escapes" not in out.results.extras
-    assert out.results.extras["n_hessians"] == 1  # the starting one only
+    with pytest.raises(qcopt.InputError, match="unconstrained minimizations only"):
+        qcopt.minimize(
+            Structure(symbols=["O", "O", "O"], geometry=x),
+            {"program": "f"},
+            hessian_program=True,
+            evaluator=qcopt.FunctionEvaluator(
+                triatomic, lambda p: _fd_hessian(triatomic, p)
+            ),
+            escape={"attempts": 2},
+            constraints={"distance": [[0, 1, 2.3]]},
+        )
 
 
 def _fd_hessian(fn, p, h=1e-5):
@@ -172,28 +190,34 @@ def _fd_hessian(fn, p, h=1e-5):
 def test_guide_mode_needs_cartesian_coordinates():
     mode = [[1.0, 0.0, 0.0]]
     with pytest.raises(ValueError, match="Cartesian coordinates only"):
-        qcopt.find_ts(_mb((-0.7, 0.6)), MB, hessian=True, evaluator=_ev(), mode=mode)
+        qcopt.find_ts(
+            _mb((-0.7, 0.6)),
+            MB,
+            hessian_program=True,
+            evaluator=_ev(),
+            mode={"guide": mode},
+        )
     out = qcopt.find_ts(
         _mb((-0.7, 0.6)),
         MB,
-        hessian=True,
+        hessian_program=True,
         evaluator=_ev(),
-        mode=mode,
-        coordinates="cartesian",
-        trust=0.1,
+        coordinate_system="cartesian",
+        mode={"guide": mode},
+        trust={"radius": 0.1},
     )
     assert out.success
 
 
 def test_irc_needs_the_transition_state_hessian():
     for start in ("model", "identity"):
-        with pytest.raises(ValueError, match="needs the transition state's Hessian"):
+        with pytest.raises(qcopt.InputError, match="hessian.initial"):
             qcopt.irc(
                 _mb(MB_SADDLES[0]),
                 MB,
-                hessian=True,
+                hessian_program=True,
                 evaluator=_ev(),
-                initial_hessian=start,
+                hessian={"initial": start},
             )
 
 
@@ -202,9 +226,9 @@ def test_finite_differences_with_a_hessian_program_are_rejected():
         qcopt.find_ts(
             _mb((-0.7, 0.6)),
             MB,
-            hessian=True,
+            hessian_program=True,
             evaluator=_ev(),
-            initial_hessian="finite_difference",
+            hessian={"initial": "finite_difference"},
         )
 
 
@@ -212,13 +236,12 @@ def test_hessian_every_works_from_a_model_start():
     out = qcopt.minimize(
         _atom(0.3, 0.2),
         MB,
-        hessian=True,
+        hessian_program=True,
         evaluator=_ev(),
-        initial_hessian="model",
-        hessian_every=1,
+        hessian={"initial": "model", "recompute_every": 1},
     )
     assert out.success
-    assert out.results.extras["n_hessians"] > 0
+    assert out.record["n_hessians"] > 0
 
 
 # ------------------------------------------------------------- separate Hessians
@@ -260,10 +283,10 @@ def test_a_hessian_program_with_other_keywords_is_separate():
     out = qcopt.find_ts(
         _mb((-0.7, 0.6)),
         solvated,
-        hessian=gas,
+        hessian_program=gas,
         evaluator=_Solvated(),
-        trust=0.1,
-        frequencies=True,
+        trust={"radius": 0.1},
+        freq={"check": True},
     )
     assert out.success, out.traceback
     for frame in out.results.frames:
@@ -271,7 +294,7 @@ def test_a_hessian_program_with_other_keywords_is_separate():
         assert frame.results.energy == pytest.approx(e)  # never the gas-phase one
         assert frame.results.hessian is None
     # frequencies from the other calculation are labelled, not put on the frame
-    assert not out.results.frames[-1].results.freqs_wavenumber
+    assert out.results.frames[-1].results.vibrational_analysis is None
     assert out.results.extras["frequencies"]["program"] == "muller-brown"
 
 
@@ -297,7 +320,9 @@ def test_compute_evaluator_pairs_hessians_without_gradients():
         return outs
 
     ev = qcopt.ComputeEvaluator(compute)
-    out = qcopt.find_ts(_mb((-0.7, 0.6)), MB, hessian=True, evaluator=ev, trust=0.1)
+    out = qcopt.find_ts(
+        _mb((-0.7, 0.6)), MB, hessian_program=True, evaluator=ev, trust={"radius": 0.1}
+    )
     assert out.success, out.traceback
     assert calls["hessian"] >= 1
 
@@ -310,9 +335,15 @@ def _irc_frames_x(out):
 
 
 def test_irc_that_runs_out_of_steps_fails():
-    out = qcopt.irc(_mb(MB_SADDLES[0]), MB, hessian=True, evaluator=_ev(), max_steps=2)
+    out = qcopt.irc(
+        _mb(MB_SADDLES[0]),
+        MB,
+        hessian_program=True,
+        evaluator=_ev(),
+        convergence={"max_iter": 2},
+    )
     assert not out.success
-    assert "max_steps" in out.traceback
+    assert "max_iter" in out.traceback
     assert len(out.results.frames) == 5  # kept
 
 
@@ -320,12 +351,14 @@ def test_irc_with_unconverged_end_minimizations_fails():
     out = qcopt.irc(
         _mb(MB_SADDLES[0]),
         MB,
-        hessian=True,
+        hessian_program=True,
         evaluator=_ev(),
-        minimize_ends=True,
-        end_maxiter=1,
-        end_coordinates="cartesian",
-        end_convergence={"gmax": 1e-12},
+        ends={
+            "minimize": True,
+            "max_iter": 1,
+            "coordinate_system": "cartesian",
+            "g_tol": 1e-12,
+        },
     )
     assert not out.success
     assert "end minimization failed: not converged" in out.traceback
@@ -347,11 +380,10 @@ def test_irc_end_check_does_not_overwrite_frames():
     out = qcopt.irc(
         _atom(0.0),
         {"program": "f"},
-        hessian=True,
+        hessian_program=True,
         evaluator=ev,
-        direction="forward",
-        step_size=0.26,
-        update="bfgs",
+        irc={"direction": "forward", "step": 0.26},
+        hessian={"update": "bfgs"},
     )
     x = _irc_frames_x(out)
     gaps = np.diff(x)
@@ -379,19 +411,17 @@ def test_irc_continues_when_an_optional_hessian_fails():
     out = qcopt.irc(
         _atom(0.0),
         {"program": "f"},
-        hessian=True,
+        hessian_program=True,
         evaluator=ev,
-        direction="forward",
-        step_size=0.26,
-        update="bfgs",
-        hessian_every=3,
+        irc={"direction": "forward", "step": 0.26},
+        hessian={"update": "bfgs", "recompute_every": 3},
     )
     assert out.success, out.traceback
     assert _irc_frames_x(out)[-1] > 1.5  # past the shoulder, toward the minimum at 2
 
 
 def test_gs2_irc_does_not_step_sideways():
-    out = qcopt.irc(_mb(MB_SADDLES[0]), MB, hessian=True, evaluator=_ev())
+    out = qcopt.irc(_mb(MB_SADDLES[0]), MB, hessian_program=True, evaluator=_ev())
     assert out.success
     z = [abs(float(f.structure.geometry[0, 2])) for f in out.results.frames]
     assert max(z) < 1e-8
@@ -401,7 +431,7 @@ def test_gs2_irc_does_not_step_sideways():
 
 
 def test_failed_finite_difference_hessians_count_their_gradients():
-    counter = algorithms._Counter()
+    counter = algorithms.common.Counter()
     counter([Answer(positions=np.zeros((1, 3)), success=False, n_gradients=7)])
     assert counter.gradients == 7
     assert counter.hessians == 0
@@ -437,7 +467,7 @@ def test_dlc_survives_a_linear_molecule_bending():
         Structure(symbols=["O", "C", "O"], geometry=x),
         {"program": "f"},
         evaluator=qcopt.FunctionEvaluator(triatomic),
-        coordinates="dlc",
+        coordinate_system="dlc",
     )
     assert out.success, out.traceback
 
@@ -465,7 +495,7 @@ def test_bad_constraints_are_reported():
     cases = [
         ({"constraints": {"distance": [[0, 1], [1, 0]]}}, "given twice"),
         (
-            {"constraints": {"distance": [[0, 1]]}, "frozen_atoms": [0, 1]},
+            {"constraints": {"distance": [[0, 1]], "frozen": [0, 1]}},
             "only frozen",
         ),
         ({"constraints": {"angle": [[0, 1, 2, 180.0]]}}, "constrain distances instead"),
@@ -501,13 +531,12 @@ def test_cartesian_fallback_keeps_the_hessian(monkeypatch):
     out = qcopt.find_ts(
         Structure(symbols=["O", "O", "O"], geometry=x),
         {"program": "f"},
-        hessian=True,
+        hessian_program=True,
         evaluator=ev,
-        recompute_hessian_on_loss=False,
+        hessian={"recompute_on_loss": False},
     )
-    ex = out.results.extras
-    assert "cartesian" in ex["coordinates"]
-    assert all(s["lowest"] < 0 for s in ex["log"])  # the negative mode survived
+    assert "cartesian" in out.record["coordinate_system"]
+    assert all(s["lowest"] < 0 for s in out.record["log"])  # the negative mode survived
 
 
 @pytest.mark.skipif(find_spec("axtb") is None, reason="needs axtb")
@@ -519,13 +548,18 @@ def test_a_reused_axtb_evaluator_uses_each_runs_method():
     ev = qcopt.AxtbEvaluator()
     gfn2 = {"program": "axtb", "model": {"method": "gfn2"}}
     gxtb = {"program": "axtb", "model": {"method": "gxtb-v2.0.1"}}
-    first = qcopt.minimize(water, gfn2, evaluator=ev, maxiter=1)
-    again = qcopt.minimize(water, gxtb, evaluator=ev, maxiter=1)
-    fresh = qcopt.minimize(water, gxtb, evaluator=qcopt.AxtbEvaluator(), maxiter=1)
+    first = qcopt.minimize(water, gfn2, evaluator=ev, convergence={"max_iter": 1})
+    again = qcopt.minimize(water, gxtb, evaluator=ev, convergence={"max_iter": 1})
+    fresh = qcopt.minimize(
+        water, gxtb, evaluator=qcopt.AxtbEvaluator(), convergence={"max_iter": 1}
+    )
     e = [o.results.frames[0].results.energy for o in (first, again, fresh)]
     assert e[1] == pytest.approx(e[2]) and e[1] != pytest.approx(e[0])
     xtb = qcopt.minimize(
-        water, {"program": "xtb", "model": {"method": "gfn2"}}, evaluator=ev, maxiter=1
+        water,
+        {"program": "xtb", "model": {"method": "gfn2"}},
+        evaluator=ev,
+        convergence={"max_iter": 1},
     )
     assert not xtb.success
     assert "computes axtb specs" in xtb.traceback
@@ -537,7 +571,11 @@ def test_a_reused_axtb_evaluator_uses_each_runs_method():
 def test_ts_check_also_runs_on_the_last_iteration():
     x, y = MB_MINIMA[1]
     out = qcopt.find_ts(
-        _atom(x + 0.01, y), MB, hessian=True, evaluator=_ev(), maxiter=2
+        _atom(x + 0.01, y),
+        MB,
+        hessian_program=True,
+        evaluator=_ev(),
+        convergence={"max_iter": 2},
     )
     assert not out.success
 
@@ -568,11 +606,10 @@ def test_irc_end_recheck_keeps_going_down_a_shoulder():
         out = qcopt.irc(
             _atom(0.0),
             {"program": "f"},
-            hessian=True,
+            hessian_program=True,
             evaluator=qcopt.FunctionEvaluator(fn, hess),
-            direction="forward",
-            step_size=ds,
-            update="bfgs",
+            irc={"direction": "forward", "step": ds},
+            hessian={"update": "bfgs"},
         )
         assert out.success, out.traceback
         assert _irc_frames_x(out)[-1] > 2.8  # the minimum at 3, not the shoulder at 2
@@ -588,7 +625,7 @@ def test_a_nan_energy_with_a_hessian_fails():
             return out
 
     ev = NaNAtHessians(muller_brown, muller_brown_hessian)
-    out = qcopt.find_ts(_mb((-0.8, 0.6)), MB, hessian=True, evaluator=ev)
+    out = qcopt.find_ts(_mb((-0.8, 0.6)), MB, hessian_program=True, evaluator=ev)
     assert not out.success
     assert "non-finite energy" in out.traceback
 
@@ -645,12 +682,12 @@ def test_counts_survive_an_exception(monkeypatch):
     def broken(*args, **kwargs):
         raise RuntimeError("frequencies broke")
 
-    monkeypatch.setattr(algorithms, "frequencies", broken)
+    monkeypatch.setattr(optimize_module, "frequencies", broken)
     out = qcopt.minimize(
-        _atom(0.3, 0.2), MB, hessian=True, evaluator=_ev(), frequencies=True
+        _atom(0.3, 0.2), MB, hessian_program=True, evaluator=_ev(), freq={"check": True}
     )
-    assert out.results.extras["n_gradients"] > 0
-    assert out.results.extras["n_hessians"] >= 1
+    assert out.record["n_gradients"] > 0
+    assert out.record["n_hessians"] >= 1
 
 
 # --------------------------------------- round 2 (end-to-end scenario matrix)
@@ -680,13 +717,13 @@ def test_lower_level_frequencies_do_not_decide_a_ts_search():
     out = qcopt.find_ts(
         _mb((-0.7, 0.6)),
         MB,
-        hessian={"program": "low"},
+        hessian_program={"program": "low"},
         evaluator=_LowLevel(low),
-        trust=0.1,
-        frequencies=True,
+        trust={"radius": 0.1},
+        freq={"check": True},
     )
     assert out.success, out.traceback
-    assert out.results.extras["n_imaginary"] == 2  # reported, labelled
+    assert out.record["n_imaginary"] == 2  # reported, labelled
     assert out.results.extras["frequencies"]["program"] == "low"
 
 
@@ -702,7 +739,10 @@ def test_irc_that_cannot_descend_fails():
         return h
 
     out = qcopt.irc(
-        _mb(MB_SADDLES[0]), MB, hessian={"program": "low"}, evaluator=_LowLevel(swapped)
+        _mb(MB_SADDLES[0]),
+        MB,
+        hessian_program={"program": "low"},
+        evaluator=_LowLevel(swapped),
     )
     assert not out.success
     ts = out.results.frames[out.results.ts_index].results.energy
@@ -729,14 +769,13 @@ def test_trust_starts_within_its_bounds():
         _atom(0.3, 0.2),
         MB,
         evaluator=_ev(False),
-        coordinates="cartesian",
-        trust=0.5,
-        trust_max=0.05,
+        coordinate_system="cartesian",
+        trust={"radius": 0.5, "max": 0.05},
     )
-    assert out.results.extras["log"][0]["trust"] == pytest.approx(0.05)
-    with pytest.raises(ValueError, match="trust_min"):
+    assert out.record["log"][0]["trust"] == pytest.approx(0.05)
+    with pytest.raises(ValueError, match="trust.min"):
         qcopt.minimize(
-            _atom(0.3, 0.2), MB, evaluator=_ev(False), trust_min=0.5, trust_max=0.1
+            _atom(0.3, 0.2), MB, evaluator=_ev(False), trust={"min": 0.5, "max": 0.1}
         )
 
 
@@ -754,7 +793,7 @@ def test_counts_are_the_calculations_run():
 
     out = qcopt.minimize(_atom(0.3, 0.2), MB, evaluator=Breaks(muller_brown))
     assert not out.success
-    assert out.results.extras["n_gradients"] == Breaks.computed == 3
+    assert out.record["n_gradients"] == Breaks.computed == 3
 
 
 def test_minimized_ends_are_not_duplicated():
@@ -762,12 +801,13 @@ def test_minimized_ends_are_not_duplicated():
     out = qcopt.irc(
         _atom(0.0),
         {"program": "f"},
-        hessian=True,
-        evaluator=qcopt.FunctionEvaluator(shoulder, shoulder_hessian),
-        direction="forward",  # the surface has no minimum on the other side
-        update="bfgs",
-        minimize_ends=True,
-        end_convergence={"gmax": 1e-2},
+        hessian_program=True,
+        evaluator=qcopt.FunctionEvaluator(
+            shoulder, shoulder_hessian
+        ),  # the surface has no minimum on the other side
+        hessian={"update": "bfgs"},
+        irc={"direction": "forward"},
+        ends={"minimize": True, "g_tol": 1e-2},
     )
     assert out.success, out.traceback
     x = [f.structure.geometry.tobytes() for f in out.results.frames]
@@ -781,7 +821,7 @@ def test_coincident_atoms_fall_back_to_cartesians():
 
 
 def test_an_irc_that_cannot_start_points_at_its_frame():
-    out = qcopt.irc(_mb(MB_MINIMA[1]), MB, hessian=True, evaluator=_ev())
+    out = qcopt.irc(_mb(MB_MINIMA[1]), MB, hessian_program=True, evaluator=_ev())
     assert not out.success
     assert out.results.ts_index == 0
 
@@ -842,7 +882,7 @@ def test_prfo_climbs_with_a_tiny_gradient_along_the_mode():
 
 
 def test_lqa_steps_have_the_requested_arc_length():
-    from qcopt.algorithms import _lqa_step
+    from qcopt.algorithms.reaction_path import lqa_step as _lqa_step
 
     step = _lqa_step(np.array([-0.05, 0.3]), np.array([1e-5, 1e-5]), 0.3)
     assert np.linalg.norm(step) == pytest.approx(0.3, rel=1e-3)
@@ -898,12 +938,12 @@ def test_a_failed_finite_difference_hessian_is_no_hessian():
         _mb((-0.7, 0.6)), MB, evaluator=qcopt.FunctionEvaluator(fails_once)
     )
     assert not out.success
-    assert out.results.extras["n_hessians"] == 0
-    assert out.results.extras["n_gradients"] == calls["n"]
+    assert out.record["n_hessians"] == 0
+    assert out.record["n_gradients"] == calls["n"]
 
 
 def test_minimization_at_a_saddle_with_its_exact_hessian_fails():
-    out = qcopt.minimize(_mb(MB_SADDLES[1]), MB, hessian=True, evaluator=_ev())
+    out = qcopt.minimize(_mb(MB_SADDLES[1]), MB, hessian_program=True, evaluator=_ev())
     assert not out.success
     assert "saddle point" in out.traceback
 
@@ -921,7 +961,7 @@ def test_ts_search_checks_a_strong_second_negative_mode():
     out = qcopt.find_ts(
         _atom(0.05),
         {"program": "f"},
-        hessian=True,
+        hessian_program=True,
         evaluator=qcopt.FunctionEvaluator(fn, hess),
     )
     assert not out.success
@@ -950,9 +990,11 @@ def _soft_top():
 def test_irc_from_a_transition_state_slightly_off_the_saddle():
     fn, hess = _soft_top()
     ev = qcopt.FunctionEvaluator(fn, hess)
-    ts = qcopt.find_ts(_atom(0.18), {"program": "f"}, hessian=True, evaluator=ev)
+    ts = qcopt.find_ts(
+        _atom(0.18), {"program": "f"}, hessian_program=True, evaluator=ev
+    )
     assert ts.success  # converged as it is: the gradient is below gmax
-    out = qcopt.irc(_atom(0.18), {"program": "f"}, hessian=True, evaluator=ev)
+    out = qcopt.irc(_atom(0.18), {"program": "f"}, hessian_program=True, evaluator=ev)
     assert out.success, out.traceback
     x = _irc_frames_x(out)
     assert x[0] == pytest.approx(-2.0, abs=0.05) and x[-1] == pytest.approx(
@@ -964,28 +1006,31 @@ def test_trust_after_a_saddle_escape_stays_within_trust_max():
     out = qcopt.minimize(
         _mb(MB_SADDLES[1]),
         MB,
-        hessian=True,
+        hessian_program=True,
         evaluator=_ev(),
-        escape_saddles=1,
-        coordinates="cartesian",
-        trust=5.0,
-        trust_max=0.05,
+        coordinate_system="cartesian",
+        escape={"attempts": 1},
+        trust={"radius": 5.0, "max": 0.05},
     )
-    assert out.results.extras.get("saddle_escapes") == 1
-    assert max(s["trust"] for s in out.results.extras["log"]) <= 0.05
+    assert out.record.get("saddle_escapes") == 1
+    assert max(s["trust"] for s in out.record["log"]) <= 0.05
 
 
 def test_same_method_hessians_with_other_settings_still_decide():
     other = {"program": "muller-brown", "keywords": {"memory": 1}}  # not the surface
     out = qcopt.minimize(
-        _mb(MB_SADDLES[1]), MB, hessian=other, evaluator=_ev(), frequencies=True
+        _mb(MB_SADDLES[1]),
+        MB,
+        hessian_program=other,
+        evaluator=_ev(),
+        freq={"check": True},
     )
     assert not out.success
     assert "saddle point" in out.traceback
 
 
 def test_lqa_finds_the_end_of_a_short_path_quickly(monkeypatch):
-    from qcopt.algorithms import _lqa_step
+    from qcopt.algorithms.reaction_path import lqa_step as _lqa_step
 
     calls = {"n": 0}
     real = np.geomspace
@@ -994,8 +1039,31 @@ def test_lqa_finds_the_end_of_a_short_path_quickly(monkeypatch):
         calls["n"] += 1
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(algorithms.np, "geomspace", counting)
+    monkeypatch.setattr(algorithms.reaction_path.np, "geomspace", counting)
     vals = np.linspace(0.01, 1.0, 30)
     step = _lqa_step(vals, 1e-3 * np.ones(30), 1.0)  # the path is shorter than 1.0
     assert np.allclose(step, -1e-3 / vals, rtol=1e-6)  # its end: the Newton step
     assert calls["n"] < 30
+
+
+def test_a_failed_childs_message_is_summarized_in_one_line():
+    from qcdata import ErrorInfo
+
+    from qcopt.evaluators import summary
+
+    # the program's own error: its first line (pydantic lists the fields after it)
+    own = ErrorInfo(kind="internal", message="ValidationError: 1 error\n  field ...")
+    assert summary(own, "a traceback") == "ValidationError: 1 error"
+    # a program that reports only a traceback: its last exception line
+    tb = (
+        "Traceback (most recent call last):\n"
+        '  File "x.py", line 1, in <module>\n'
+        "pydantic_core.ValidationError: 1 validation error for SinglePointData\n"
+        "  Value error, ...\n"
+        "    For further information visit https://errors.pydantic.dev/\n"
+    )
+    assert summary(None, tb) == (
+        "pydantic_core.ValidationError: 1 validation error for SinglePointData"
+    )
+    assert summary(None, "SCF did not converge\n") == "SCF did not converge"
+    assert summary(None, None) == "the calculation failed"
