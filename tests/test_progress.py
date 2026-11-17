@@ -143,6 +143,8 @@ def test_each_irc_branch_ends_with_a_code_the_record_schema_names():
     assert (out.error.kind, out.error.code) == ("convergence", "irc_incomplete")
     ends = {name: b["end"] for name, b in out.record["branches"].items()}
     assert ends == {"forward": "max_iter", "reverse": "max_iter"}
+    for b in out.record["branches"].values():  # max_iter counts steps, not frames
+        assert b["steps"] >= 3 and b["frames"] <= b["steps"]
     assert "the forward branch stopped: max_iter" in out.error.message
     schema = program.record_schema("irc")["properties"]["branches"]
     assert schema["additionalProperties"]["properties"]["end"]["enum"] == list(

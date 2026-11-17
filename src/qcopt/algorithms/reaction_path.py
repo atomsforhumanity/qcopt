@@ -271,8 +271,16 @@ class _Branch:
         return f"{text}: {self.error}" if self.error is not None else text
 
     def end_record(self) -> dict[str, Any]:
-        """Its entry in ``record["branches"]``."""
-        entry: dict[str, Any] = {"end": self.reason, "steps": len(self.frames)}
+        """Its entry in ``record["branches"]``.
+
+        ``steps``: the gradient calculations it took, retried overshoots included (what
+        ``convergence.max_iter`` counts); ``frames``: the points it kept.
+        """
+        entry: dict[str, Any] = {
+            "end": self.reason,
+            "steps": self.steps,
+            "frames": len(self.frames),
+        }
         if self.error is not None:
             entry["error"] = self.error
         return entry

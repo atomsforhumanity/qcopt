@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+### Changed
+
+- An IRC branch's record (`record["branches"][name]`) gives `steps`, the gradient
+  calculations it took with retried overshoots included (what `convergence.max_iter`
+  counts), and `frames`, the points it kept. `steps` was the frame count, so a branch
+  that ended at `max_iter` 300 could say 222.
+
 ## [0.3.0a6] - 2026-11-17
 
 ### Changed

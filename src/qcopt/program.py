@@ -172,10 +172,18 @@ class QcoptProgram:
                     "type": "object",
                     "properties": {
                         "end": {"enum": list(BRANCH_ENDS)},
-                        "steps": {"type": "integer"},
+                        "steps": {
+                            "type": "integer",
+                            "description": "Gradient calculations, retried steps "
+                            "included (what convergence.max_iter counts).",
+                        },
+                        "frames": {
+                            "type": "integer",
+                            "description": "Points kept on the path.",
+                        },
                         "error": {"type": "string"},
                     },
-                    "required": ["end", "steps"],
+                    "required": ["end", "steps", "frames"],
                 },
             }
         return {"type": "object", "properties": props}
