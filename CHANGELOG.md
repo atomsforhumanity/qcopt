@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.3.0a5] - 2026-11-17
+
 ### Added
 
 - **Progress events** (the stack's decision 14a): with a `progress=` callable on
@@ -360,7 +362,8 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
   `find_ts` and `irc` names the Hessian program only, and other values are errors
   (a string was ignored).
 
-[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a4...HEAD
+[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a5...HEAD
+[0.3.0a5]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a5
 [0.3.0a4]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a4
 [0.3.0a3]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a3
 [0.3.0a2]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a2
