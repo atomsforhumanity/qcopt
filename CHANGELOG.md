@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.3.0a9] - 2026-11-17
+
 ### Added
 
 - **A stop or a timeout ends a run at its next step** with what it reached: a failure
@@ -422,7 +424,8 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
   `find_ts` and `irc` names the Hessian program only, and other values are errors
   (a string was ignored).
 
-[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a8...HEAD
+[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a9...HEAD
+[0.3.0a9]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a9
 [0.3.0a8]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a8
 [0.3.0a7]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a7
 [0.3.0a6]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a6
