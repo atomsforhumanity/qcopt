@@ -622,6 +622,25 @@ class _Optimization:
                 "saddle_point",
             )
 
+    def _downhill(self, mode: Array) -> Array:
+        """The mode, signed to point toward lower energy.
+
+        An eigenvector's sign is arbitrary: another LAPACK build may flip it, and an
+        escape along it would then reach the other minimum. The step goes against the
+        gradient's component along the mode, the side of the saddle point the
+        structure already lies on. Without such a component, the largest displacement
+        is made positive (the IRC's convention).
+
+        Args:
+            mode: ``(n, 3)`` Cartesian displacement of the imaginary mode.
+        """
+        slope = float(
+            np.dot(np.asarray(self.a.gradient, dtype=float).ravel(), mode.ravel())
+        )
+        if slope == 0.0:
+            return mode * np.sign(mode.flat[np.argmax(np.abs(mode))])
+        return -np.sign(slope) * mode
+
     def _escape_saddle(self) -> Algorithm:
         """Check the frequencies; at a saddle point, step off along the lowest mode.
 
@@ -657,7 +676,7 @@ class _Optimization:
         self.escapes += 1
         self.iterations += 1
         self.info["saddle_escapes"] = self.escapes
-        mode = np.asarray(self.freqs.modes[0], dtype=float)
+        mode = self._downhill(np.asarray(self.freqs.modes[0], dtype=float))
         self.x = x = x + mode / max_atomic_norm(mode) * opts.escape.step
         (a,) = self.count((yield [Ask("gradient", x, self.lineage)]))
         if not a.success:

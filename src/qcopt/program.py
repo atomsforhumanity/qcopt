@@ -77,7 +77,7 @@ def compute(
 #: qcopt's numerics epoch per calculation type. Bump a type's epoch whenever its golden
 #: trajectories change (results for an unchanged input may change); never for
 #: bit-identical changes.
-NUMERICS_EPOCHS = {"optimization": 1, "transition_state": 1, "irc": 1}
+NUMERICS_EPOCHS = {"optimization": 2, "transition_state": 1, "irc": 1}
 
 
 @functools.cache

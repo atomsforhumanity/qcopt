@@ -1027,6 +1027,37 @@ def test_trust_after_a_saddle_escape_stays_within_trust_max():
     assert max(s["trust"] for s in out.record["log"]) <= 0.05
 
 
+def test_a_saddle_escape_does_not_depend_on_the_mode_s_sign(monkeypatch):
+    # An eigensolver may return either sign (numpy 2.5.4 and 2.5.5 differ): the
+    # escape must reach the same minimum either way.
+    def run():
+        return minimize(
+            _mb(MB_SADDLES[1]),
+            MB,
+            hessian_program=True,
+            evaluator=_ev(),
+            coordinate_system="cartesian",
+            escape={"attempts": 1},
+        )
+
+    out = run()
+    frequencies = optimize_module.frequencies
+
+    def flipped(*args, **kwargs):
+        f = frequencies(*args, **kwargs)
+        f.modes = -f.modes
+        return f
+
+    monkeypatch.setattr(optimize_module, "frequencies", flipped)
+    out_flipped = run()
+    assert out.record["saddle_escapes"] == out_flipped.record["saddle_escapes"] == 1
+    assert out.success and out_flipped.success
+    np.testing.assert_array_equal(
+        out.results.final_structure.geometry,
+        out_flipped.results.final_structure.geometry,
+    )
+
+
 def test_same_method_hessians_with_other_settings_still_decide():
     other = {"program": "muller-brown", "keywords": {"memory": 1}}  # not the surface
     out = minimize(

@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+### Fixed
+
+- **A saddle escape (`escape.attempts`) steps toward lower energy**, against the
+  gradient's component along the imaginary mode. It stepped along the mode as the
+  eigensolver returned it, whose sign is arbitrary: numpy 2.5.4 and 2.5.5 flipped it on
+  one of our test reactions, and the same minimization then reached minima 29 kcal/mol
+  apart. Now both reach the same one. Escapes are off by default; the optimization
+  numerics epoch is 2.
+
 ## [0.3.0a7] - 2026-11-17
 
 ### Changed
