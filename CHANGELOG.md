@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.3.0a7] - 2026-11-17
+
 ### Changed
 
 - **Requires qccompute 0.23.0a7 and qcdata 0.24.0a8** (the stack's alpha 7). The runner
@@ -397,7 +399,8 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
   `find_ts` and `irc` names the Hessian program only, and other values are errors
   (a string was ignored).
 
-[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a6...HEAD
+[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a7...HEAD
+[0.3.0a7]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a7
 [0.3.0a6]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a6
 [0.3.0a5]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a5
 [0.3.0a4]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a4
