@@ -137,6 +137,14 @@ programs, guide modes, batched runs).
   constants with their rationale; `drive` plans each ask with a small class (direct,
   paired, finite difference).
 
+## [0.2.3] - 2026-11-17
+
+### Changed
+
+- Caps its dependencies below their next minor versions, which change the interfaces
+  qcopt 0.2 uses: qcdata <0.24, axtb <0.2 (extra `axtb`), qccompute <0.23 and qccodec
+  <0.22 (extra `qccompute`). qcopt 0.3 moves to the new versions.
+
 ## [0.2.2] - 2026-11-07
 
 ### Fixed
@@ -281,6 +289,7 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
 
 [unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a1...HEAD
 [0.3.0a1]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a1
+[0.2.3]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.3
 [0.2.2]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.2
 [0.2.1]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.1
 [0.2.0]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.0
