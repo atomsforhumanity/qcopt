@@ -68,8 +68,13 @@ gradients from all of them are computed together. qcopt computes its gradients a
 Hessians through sessions of the child programs, one per calculation and program,
 warm-started from geometry to geometry (each IRC branch its own lineage), under the
 runner's resources. Called directly, `qcopt.compute` hands itself to qccompute's default
-runner, which runs it on this machine. Until axtb has sessions of its own, qcopt runs
-axtb in this process.
+runner, which runs it on this machine.
+
+A qcopt calculation asks the runner for the threads its children's plans ask for. A child
+that names no number (axtb without `threads`) asks for all of them, which a lone search
+uses well. Many calculations submitted one by one (`qccompute.submit`) then run one at a
+time: give the child's spec `threads` (often 1 for small molecules), or pass them as one
+list, which runs them together.
 
 ## Settings
 
