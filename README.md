@@ -151,10 +151,12 @@ gradients; results are summarized in AFH's findings.
 ## Install
 
 ```sh
-pip install --pre qcopt         # 0.3 alphas, on the qcdata 0.24 and qccompute 0.23 alphas
-pip install qcopt               # any program qccompute runs
-pip install "qcopt[axtb]"       # with axtb: in-process g-xTB and GFN2-xTB, analytic Hessians
+pip install --pre "qcopt==0.3.0a3"         # on the stack's alpha 3 (qcdata 0.24.0a4, qccompute 0.23.0a3)
+pip install --pre "qcopt[axtb]==0.3.0a3"   # with axtb: in-process g-xTB and GFN2-xTB, analytic Hessians
 ```
+
+This README describes the 0.3 alphas. Without `--pre`, pip installs qcopt 0.2, whose
+interface differs.
 
 [axtb](https://github.com/atomsforhumanity/axtb) 0.1.0 or newer. Its wheels are for x86-64
 Linux; elsewhere pip builds it from source, which needs Rust.
