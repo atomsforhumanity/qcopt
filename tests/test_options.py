@@ -2,18 +2,29 @@
 
 import numpy as np
 import pytest
-from qcdata import ProgramInput, Structure
+from qcdata import ProgramError, ProgramInput, Structure
 
 import qcopt
-from qcopt.options import parse_options
+from qcopt.errors import InputError
+from qcopt.options import default_options, options_schema, parse_options
 
+from .helpers import (
+    FunctionEvaluator,
+    FunctionProgram,
+    find_ts,
+    irc,
+    minimize,
+    qcopt_input,
+    registered,
+    run,
+)
 from .surfaces import MB_MINIMA, muller_brown, muller_brown_hessian
 
 MB = {"program": "muller-brown"}
 
 
 def _ev(hessian=True):
-    return qcopt.FunctionEvaluator(
+    return FunctionEvaluator(
         muller_brown, muller_brown_hessian if hessian else None, name="muller-brown"
     )
 
@@ -30,8 +41,8 @@ WATER = Structure(
 
 @pytest.mark.parametrize("calctype", ["optimization", "transition_state", "irc"])
 def test_defaults_and_schema_cover_every_setting(calctype):
-    defaults = qcopt.default_options(calctype)
-    schema = qcopt.options_schema(calctype)
+    defaults = default_options(calctype)
+    schema = options_schema(calctype)
     assert set(defaults) == set(schema["properties"])
     assert defaults["convergence"]["max_iter"] >= 1
     # every group's settings carry a tier for documentation
@@ -52,7 +63,7 @@ def test_defaults_and_schema_cover_every_setting(calctype):
     ],
 )
 def test_bad_settings_say_what_to_do(keywords, message):
-    with pytest.raises(qcopt.InputError, match=message):
+    with pytest.raises(InputError, match=message):
         parse_options("optimization", keywords)
 
 
@@ -71,7 +82,7 @@ def test_bad_settings_say_what_to_do(keywords, message):
     ],
 )
 def test_settings_of_another_calculation_type_are_errors(calctype, keywords, message):
-    with pytest.raises(qcopt.InputError, match=message):
+    with pytest.raises(InputError, match=message):
         parse_options(calctype, keywords)
 
 
@@ -93,7 +104,7 @@ def test_settings_of_another_calculation_type_are_errors(calctype, keywords, mes
 def test_settings_that_cannot_affect_the_calculation_are_errors(
     calctype, keywords, path
 ):
-    with pytest.raises(qcopt.InputError, match=f"{path} cannot affect") as info:
+    with pytest.raises(InputError, match=f"{path} cannot affect") as info:
         parse_options(calctype, keywords)
     assert info.value.code == "no_effect"
 
@@ -106,43 +117,29 @@ def test_settings_acting_only_if_a_condition_arises_are_allowed():
 
 
 def test_the_finite_difference_step_needs_finite_differences():
-    with pytest.raises(qcopt.InputError, match="hessian.step cannot affect"):
-        qcopt.find_ts(
+    with pytest.raises(ProgramError, match="hessian.step cannot affect"):
+        find_ts(
             _atom(-0.8, 0.6),
             MB,
             hessian_program=True,
             evaluator=_ev(),
             hessian={"step": 0.01},
         )
-    out = qcopt.find_ts(
-        _atom(-0.8, 0.6), MB, evaluator=_ev(False), hessian={"step": 0.01}
-    )
+    out = find_ts(_atom(-0.8, 0.6), MB, evaluator=_ev(False), hessian={"step": 0.01})
     assert out.success, out.traceback
 
 
-def test_input_errors_are_value_errors_with_a_kind():
-    with pytest.raises(ValueError) as info:
-        qcopt.minimize(_atom(0.3, 0.2), MB, evaluator=_ev(), nonsense=1)
-    assert info.value.kind == "input"
-
-
-def test_groups_can_be_given_as_models():
-    out = qcopt.minimize(
-        _atom(0.3, 0.2),
-        MB,
-        evaluator=_ev(),
-        convergence=qcopt.ConvergenceSettings(g_tol=1e-6),
-        trust=qcopt.MinimizationTrustSettings(radius=0.1),
-    )
-    assert out.success, out.traceback
-    assert out.input_data.keywords["convergence"] == {"g_tol": 1e-6}
-    settings = out.resolved.settings
-    assert settings["convergence"]["g_tol"] == 1e-6
-    assert settings["trust"]["radius"] == 0.1
+def test_input_errors_raise_with_kind_input_and_the_failed_output():
+    with registered(FunctionProgram("muller-brown", muller_brown)):
+        with pytest.raises(ProgramError, match="unknown setting 'nonsense'") as info:
+            qcopt.compute(qcopt_input("optimization", _atom(0.3, 0.2), MB, nonsense=1))
+    assert (info.value.error.kind, info.value.error.code) == ("input", "unknown_key")
+    out = info.value.output
+    assert not out.success and out.results.frames == []
 
 
 def test_auto_is_resolved_with_reasons():
-    out = qcopt.find_ts(_atom(-0.8, 0.6), MB, evaluator=_ev(False))
+    out = find_ts(_atom(-0.8, 0.6), MB, evaluator=_ev(False))
     resolved = out.resolved
     assert resolved.settings["coordinate_system"] == "cartesian"  # one atom
     assert resolved.settings["hessian"]["initial"] == "finite_difference"
@@ -152,10 +149,10 @@ def test_auto_is_resolved_with_reasons():
         "hessian.initial",
         "hessian.update",
     }
-    frozen = qcopt.minimize(
+    frozen = minimize(
         WATER,
         MB,
-        evaluator=qcopt.FunctionEvaluator(_harmonic),
+        evaluator=FunctionEvaluator(_harmonic),
         constraints={"frozen": [0]},
     )
     assert frozen.resolved.settings["coordinate_system"] == ("cartesian")
@@ -174,7 +171,7 @@ def test_resolved_settings_reproduce_the_run(calctype):
         "transition_state": (-0.8, 0.6),
         "irc": (-0.822002, 0.624313),
     }[calctype]
-    first = qcopt.run(
+    first = run(
         ProgramInput(
             program="qcopt",
             calctype=calctype,
@@ -188,7 +185,7 @@ def test_resolved_settings_reproduce_the_run(calctype):
         evaluator=_ev(),
     )
     settings = first.resolved.settings
-    again = qcopt.run(
+    again = run(
         first.input_data.model_copy(update={"keywords": settings}), evaluator=_ev()
     )
     assert again.resolved.settings == settings
@@ -197,48 +194,59 @@ def test_resolved_settings_reproduce_the_run(calctype):
         assert np.array_equal(a.structure.geometry, b.structure.geometry)
 
 
-def test_failures_report_their_kind_and_code():
-    unconverged = qcopt.minimize(
-        _atom(-0.4, 1.2), MB, evaluator=_ev(), convergence={"max_iter": 2}
-    )
-    assert (unconverged.error.kind, unconverged.error.code) == (
-        "convergence",
-        "max_iter",
-    )
-
+def test_failures_raise_with_their_kind_code_and_output():
     def broken(x):
         raise RuntimeError("the program crashed")
 
-    failed = qcopt.minimize(
-        _atom(-0.4, 1.2), MB, evaluator=qcopt.FunctionEvaluator(broken)
+    surfaces = (
+        FunctionProgram("muller-brown", muller_brown, muller_brown_hessian),
+        FunctionProgram("broken", broken),
     )
-    assert failed.error.kind == "program"
-    assert failed.error.program == "function"
+    with registered(*surfaces):
+        with pytest.raises(ProgramError) as info:
+            qcopt.compute(
+                qcopt_input(
+                    "optimization", _atom(-0.4, 1.2), MB, convergence={"max_iter": 2}
+                )
+            )
+        error, out = info.value.error, info.value.output
+        assert (error.kind, error.code) == ("convergence", "max_iter")
+        assert out.results.frames  # the frames so far, to restart from
+        assert out.resolved.settings["convergence"]["max_iter"] == 2
 
-    at_minimum = qcopt.find_ts(
-        _atom(*MB_MINIMA[0]), MB, hessian_program=True, evaluator=_ev()
-    )
-    assert not at_minimum.success
-    assert (at_minimum.error.kind, at_minimum.error.code) == (
-        "convergence",
-        "not_first_order_saddle",
-    )
-    ok = qcopt.minimize(_atom(-0.4, 1.2), MB, evaluator=_ev())
+        with pytest.raises(ProgramError) as info:
+            qcopt.compute(
+                qcopt_input("optimization", _atom(-0.4, 1.2), {"program": "broken"})
+            )
+        error = info.value.error
+        assert (error.kind, error.program) == ("program", "broken")
+        assert "the program crashed" in error.cause.message
+
+        with pytest.raises(ProgramError) as info:
+            qcopt.compute(
+                qcopt_input(
+                    "transition_state", _atom(*MB_MINIMA[0]), MB, hessian_program=True
+                )
+            )
+        error = info.value.error
+        assert (error.kind, error.code) == ("convergence", "not_first_order_saddle")
+
+        ok = qcopt.compute(qcopt_input("optimization", _atom(-0.4, 1.2), MB))
     assert ok.success and ok.error is None
 
 
 def test_record_says_what_happened_and_how_long_it_took():
-    out = qcopt.minimize(_atom(-0.4, 1.2), MB, evaluator=_ev())
+    out = minimize(_atom(-0.4, 1.2), MB, evaluator=_ev())
     record = out.record
     assert record["converged"] is True
     assert record["n_gradients"] >= len(out.results.frames)  # rejected steps too
     assert record["coordinate_system"] == "cartesian"
     timings = out.execution.timings
-    assert timings["total"] >= timings["evaluator"] >= 0.0
+    assert timings["total"] >= timings["subprograms"] >= 0.0
     assert timings["optimizer"] == pytest.approx(
-        timings["total"] - timings["evaluator"]
+        timings["total"] - timings["subprograms"]
     )
-    path = qcopt.irc(
+    path = irc(
         _atom(-0.822002, 0.624313),
         MB,
         hessian_program=True,
@@ -271,6 +279,6 @@ def test_the_settings_reference_is_current():
     ],
 )
 def test_unknown_settings_carry_afh_codes(keywords, code):
-    with pytest.raises(qcopt.InputError) as info:
+    with pytest.raises(InputError) as info:
         parse_options("optimization", keywords)
     assert info.value.code == code

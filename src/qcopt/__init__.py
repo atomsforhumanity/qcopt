@@ -1,66 +1,28 @@
-"""qcopt: minimizations, transition-state searches, and IRCs returning qcdata results."""
+"""qcopt: minima, transition states and IRCs, as an AFH program.
 
-from .api import find_ts, irc, minimize, run
-from .driver import Answer, Ask, Request, TaskContext, drive
-from .errors import InputError, QcoptError
-from .evaluators import AxtbEvaluator, ComputeEvaluator, FunctionEvaluator
-from .options import (
-    ConstraintSettings,
-    ConvergenceSettings,
-    EndSettings,
-    EscapeSettings,
-    FreqSettings,
-    HessianSettings,
-    IRCConstraintSettings,
-    IRCConvergenceSettings,
-    IRCHessianSettings,
-    IRCOptions,
-    IRCSettings,
-    MinimizationTrustSettings,
-    ModeSettings,
-    OptimizationOptions,
-    TransitionStateHessianSettings,
-    TransitionStateOptions,
-    TrustSettings,
-    default_options,
-    options_schema,
-)
-from .vibrations import Frequencies, frequencies
+qcopt's Python interface is one function::
 
-__all__ = [
-    "Answer",
-    "Ask",
-    "AxtbEvaluator",
-    "ComputeEvaluator",
-    "ConstraintSettings",
-    "ConvergenceSettings",
-    "EndSettings",
-    "EscapeSettings",
-    "FreqSettings",
-    "Frequencies",
-    "FunctionEvaluator",
-    "HessianSettings",
-    "IRCConstraintSettings",
-    "IRCConvergenceSettings",
-    "IRCHessianSettings",
-    "IRCOptions",
-    "IRCSettings",
-    "InputError",
-    "MinimizationTrustSettings",
-    "ModeSettings",
-    "OptimizationOptions",
-    "QcoptError",
-    "Request",
-    "TaskContext",
-    "TransitionStateHessianSettings",
-    "TransitionStateOptions",
-    "TrustSettings",
-    "default_options",
-    "drive",
-    "find_ts",
-    "frequencies",
-    "irc",
-    "minimize",
-    "options_schema",
-    "run",
-]
+    import qcopt
+    from qcdata import ProgramInput
+
+    out = qcopt.compute(
+        ProgramInput(
+            program="qcopt",
+            calctype="transition_state",  # or "optimization", "irc"
+            structure=guess,
+            keywords={"freq": {"check": True}},
+            subprograms=[
+                {"program": "axtb", "calctype": "gradient", "model": {"method": "gfn2"}},
+                {"program": "axtb", "calctype": "hessian", "model": {"method": "gfn2"}},
+            ],
+        )
+    )
+
+A failure raises ``qcdata.ProgramError``. The settings are in docs/settings.md and
+:mod:`qcopt.options`. Many inputs at once go through a runner
+(``qccompute.compute`` with a list), which runs them in lockstep.
+"""
+
+from .program import compute
+
+__all__ = ["compute"]

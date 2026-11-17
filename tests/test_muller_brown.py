@@ -4,13 +4,13 @@ from qcdata import (
     CalcType,
     OptimizationData,
     PathData,
+    ProgramError,
     ProgramInput,
     ProgramSpec,
     Structure,
 )
 
-import qcopt
-
+from .helpers import FunctionEvaluator, find_ts, irc, minimize, run
 from .surfaces import MB_MINIMA, MB_SADDLES, muller_brown, muller_brown_hessian
 
 SPEC = {"program": "muller-brown"}
@@ -21,7 +21,7 @@ def _structure(x, y):
 
 
 def _evaluator(hessian=True):
-    return qcopt.FunctionEvaluator(
+    return FunctionEvaluator(
         muller_brown, muller_brown_hessian if hessian else None, name="muller-brown"
     )
 
@@ -35,7 +35,7 @@ def _xy(structure):
 )
 @pytest.mark.parametrize("hessian", [None, True])
 def test_minimize_finds_each_minimum(start, expected, hessian):
-    out = qcopt.minimize(
+    out = minimize(
         _structure(*start),
         SPEC,
         hessian_program=hessian,
@@ -53,7 +53,7 @@ def test_minimize_finds_each_minimum(start, expected, hessian):
 @pytest.mark.parametrize("start, expected", [((-0.7, 0.6), 0), ((0.25, 0.3), 1)])
 @pytest.mark.parametrize("hessian", [True, None])  # program Hessian, finite differences
 def test_find_ts_finds_each_saddle(start, expected, hessian):
-    out = qcopt.find_ts(
+    out = find_ts(
         _structure(*start),
         SPEC,
         hessian_program=hessian,
@@ -69,7 +69,7 @@ def test_find_ts_finds_each_saddle(start, expected, hessian):
 @pytest.mark.parametrize("saddle, ends", [(0, (0, 2)), (1, (1, 2))])
 @pytest.mark.parametrize("every", [0, 1])
 def test_irc_connects_the_minima(saddle, ends, every):
-    out = qcopt.irc(
+    out = irc(
         _structure(*MB_SADDLES[saddle]),
         SPEC,
         hessian_program=True,
@@ -95,7 +95,7 @@ def test_irc_connects_the_minima(saddle, ends, every):
 def test_run_many_inputs_together_batches_requests():
     calls = []
 
-    class Recording(qcopt.FunctionEvaluator):
+    class Recording(FunctionEvaluator):
         def __call__(self, requests):
             calls.append(len(requests))
             return super().__call__(requests)
@@ -112,7 +112,7 @@ def test_run_many_inputs_together_batches_requests():
         )
         for s in [(-0.4, 1.2), (0.3, 0.2), (0.0, 0.6)]
     ]
-    outs = qcopt.run(inputs, evaluator=ev)
+    outs = run(inputs, evaluator=ev)
     assert [o.success for o in outs] == [True, True, True]
     assert calls[0] == 3  # the first round asks all three at once
     for out, m in zip(outs, MB_MINIMA, strict=True):
@@ -125,10 +125,10 @@ def test_failed_gradient_is_reported_with_frames():
             raise RuntimeError("SCF did not converge")
         return muller_brown(pos)
 
-    out = qcopt.minimize(
+    out = minimize(
         _structure(-0.05, 0.47),
         SPEC,
-        evaluator=qcopt.FunctionEvaluator(broken),
+        evaluator=FunctionEvaluator(broken),
         trust={"radius": 0.5},
         convergence={"max_iter": 5},
     )
@@ -138,20 +138,18 @@ def test_failed_gradient_is_reported_with_frames():
     def always(pos):
         raise RuntimeError("no")
 
-    out = qcopt.minimize(
-        _structure(0.0, 0.0), SPEC, evaluator=qcopt.FunctionEvaluator(always)
-    )
+    out = minimize(_structure(0.0, 0.0), SPEC, evaluator=FunctionEvaluator(always))
     assert not out.success
     assert "no" in out.traceback
 
 
 def test_unknown_keywords_are_errors():
-    with pytest.raises(ValueError):
-        qcopt.minimize(_structure(0, 0), SPEC, evaluator=_evaluator(), not_a_keyword=1)
+    with pytest.raises(ProgramError, match="not_a_keyword"):
+        minimize(_structure(0, 0), SPEC, evaluator=_evaluator(), not_a_keyword=1)
 
 
 def test_not_converged_keeps_frames_and_fails():
-    out = qcopt.minimize(
+    out = minimize(
         _structure(-0.4, 1.2), SPEC, evaluator=_evaluator(), convergence={"max_iter": 2}
     )
     assert not out.success
@@ -160,7 +158,7 @@ def test_not_converged_keeps_frames_and_fails():
 
 
 def test_output_round_trips_through_json():
-    out = qcopt.find_ts(
+    out = find_ts(
         _structure(-0.7, 0.6),
         SPEC,
         hessian_program=True,
@@ -175,7 +173,7 @@ def test_output_round_trips_through_json():
 
 @pytest.mark.parametrize("step", [0.15, 0.3])
 def test_irc_with_long_steps_still_reaches_the_minima(step):
-    out = qcopt.irc(
+    out = irc(
         _structure(*MB_SADDLES[0]),
         SPEC,
         hessian_program=True,
@@ -193,7 +191,7 @@ def test_irc_with_long_steps_still_reaches_the_minima(step):
 
 
 def test_irc_minimize_ends_lands_on_the_minima():
-    out = qcopt.irc(
+    out = irc(
         _structure(*MB_SADDLES[0]),
         SPEC,
         hessian_program=True,
@@ -216,7 +214,7 @@ def test_irc_minimize_ends_lands_on_the_minima():
 
 @pytest.mark.parametrize("step", [0.05, 0.2])
 def test_gs2_irc_reaches_the_minima(step):
-    out = qcopt.irc(
+    out = irc(
         _structure(*MB_SADDLES[1]),
         SPEC,
         hessian_program=True,

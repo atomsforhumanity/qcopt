@@ -1,8 +1,7 @@
 """qcopt's settings: one options model per calculation type, made of setting groups.
 
-A qcopt calculation is configured by the ``keywords`` of its ``ProgramInput`` (or the
-keyword arguments of :func:`qcopt.minimize`, :func:`qcopt.find_ts` and
-:func:`qcopt.irc`), validated by the options model of its calculation type:
+A qcopt calculation is configured by the ``keywords`` of its ``ProgramInput``,
+validated by the options model of its calculation type:
 
 - ``optimization`` (a minimum): :class:`OptimizationOptions`
 - ``transition_state``: :class:`TransitionStateOptions`

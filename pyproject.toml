@@ -10,9 +10,9 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.24.0",
     "pydantic>=2.0",
-    # pins move to the releases with the program protocol in qccompute (qcdata data-only)
+    # qccompute: 0.23.0a1 (the runner and the program protocol) once it is out
     "qccompute>=0.22.0",
-    "qcdata>=0.23.1",
+    "qcdata>=0.24.0a2",
     "qcref>=0.5.1",
 ]
 classifiers = [

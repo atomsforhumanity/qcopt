@@ -11,27 +11,36 @@ computed together: batched on a GPU, side by side in threads, or as one qccomput
 The algorithms do not know which.
 
 ```
-ProgramInput ──► api._prepare ──► algorithms (generators) ◄──► driver.drive ◄──► evaluator
-  keywords         options,          yield [Ask, ...]           plans per ask      axtb in-process,
-  subprograms      resolved autos,   receive [Answer, ...]      one call/round     sessions, qccompute,
-                   TaskContext       return RunResult                              a function
-                                          │
-                                          ▼
-                                    api._output ──► ProgramOutput (frames, resolved, record,
-                                                                    error, timings)
+qcopt.compute(ProgramInput, ctx)
+  │
+  ▼
+calculation.prepare ──► algorithms (generators) ◄──► driver.drive ◄──► evaluator
+  options,                yield [Ask, ...]            plans per ask      child sessions
+  resolved autos,         receive [Answer, ...]       one call/round     from ctx (axtb in
+  TaskContext             return RunResult                               process until it
+                               │                                         has sessions)
+                               ▼
+                      calculation._output ──► ProgramOutput (frames, resolved, record,
+                                                              error, timings); raised
+                                                              as ProgramError on failure
 ```
+
+qcopt is a program with subprograms (`qccompute.program`). Its one Python interface is
+`compute(inp, ctx=None)`: a runner passes `ctx` (the resource grant and the way to open
+child sessions); called directly, qcopt opens its children's sessions as
+`qccompute.session` does. qcopt has no route of its own to programs.
 
 ## Modules
 
 | module | concept |
 |---|---|
-| `api.py` | `ProgramInput` in, `ProgramOutput` out: checks inputs (and the Hessian they give, `ProgramInput.given`), resolves every `auto` (with reasons), builds frames and results; `minimize`, `find_ts`, `irc` (from a structure or a search's output), `run` |
-| `options.py` | the settings: one pydantic model per calculation type, made of setting groups; suggestions for unknown keys; errors for settings that cannot affect the calculation; `default_options`, `options_schema` |
-| `errors.py` | `InputError` and the error kinds results report |
+| `program.py` | qcopt as an AFH program (`qccompute.programs` entry point `qcopt`): `compute` (the Python interface; raises `ProgramError` on failure), `plan` (checks the input and its children's settings, resolves every `auto`), `compute_batch` (inputs in lockstep, failures in place) |
+| `calculation.py` | one calculation: `prepare` checks an input (and the Hessian it gives, `ProgramInput.given`) and resolves every `auto` (with reasons); `run` runs prepared calculations in lockstep on an evaluator; `_output` builds frames and results |
+| `options.py` | the settings: one pydantic model per calculation type, made of setting groups; suggestions for unknown keys; errors for settings that cannot affect the calculation; `default_options`, `options_schema` (the program's `settings_schema`) |
+| `errors.py` | `InputError` (inside qcopt; `compute` raises it as `ProgramError` of kind `input`) and the error kinds results report |
 | `algorithms/` | the algorithms as generators: `optimization.py` (minima, transition states), `reaction_path.py` (IRC), `common.py` (their result, counting, failure handling, `lockstep` for nested algorithms) |
 | `driver.py` | `Ask`, `Answer`, `Request`, `TaskContext`, the `Evaluator` protocol, and `drive`: per ask a plan (direct, a Hessian paired with the gradient program's gradient, finite differences) |
-| `evaluators.py` | what computes requests: `FunctionEvaluator` (a Python function), `AxtbEvaluator` (in-process, warm-started), `ComputeEvaluator` (qccompute), routing between them; `default_evaluator` picks per task (axtb in-process, the program's own sessions, else qccompute) |
-| `program.py` | qcopt as an AFH program (`qccompute.programs` entry point): `plan`, `compute`, `compute_batch`; `SessionEvaluator`, which computes every task's requests through program sessions (one per task and program, warm-started, a lineage per IRC branch) |
+| `evaluators.py` | what computes requests: `SessionEvaluator`, through child sessions opened from `ctx` (one per task and program, warm-started, a lineage per IRC branch, displaced gradients not kept), and until axtb has sessions `AxtbEvaluator` (in-process, warm-started), with `RoutingEvaluator` between them |
 | `coordinates.py` | the coordinate systems a step is taken in, behind one interface: `CartesianCoordinates`, `InternalCoordinates` (TRIC, DLC) |
 | `internal.py`, `primitives.py` | delocalized internal coordinates: primitives (stretches, bends, torsions, fragment rotations), B-matrices, back-transformation |
 | `space.py` | the Cartesian space an optimizer moves in: rigid motion and frozen atoms projected out and given a large curvature (mass-weighted for IRCs) |
@@ -43,7 +52,7 @@ ProgramInput ──► api._prepare ──► algorithms (generators) ◄──�
 
 ## How a run flows
 
-1. **Prepare** (`api._prepare`): check the program, calculation type and subprograms;
+1. **Prepare** (`calculation.prepare`): check the program, calculation type and subprograms;
    validate the settings (`options.parse_options`); resolve each `auto` and record why;
    build the `TaskContext` (symbols, charge, the gradient and Hessian `ProgramSpec`s).
    Every input is checked before anything is computed.
@@ -59,10 +68,11 @@ ProgramInput ──► api._prepare ──► algorithms (generators) ◄──�
    same shape: branches advance together, each a `_Branch` with its own step length,
    Hessian and end test; the ends are minimized by the minimization algorithm, run in
    lockstep.
-4. **Output** (`api._output`): frames from the answers; `resolved` (the settings with
+4. **Output** (`calculation._output`): frames from the answers; `resolved` (the settings with
    every `auto` replaced, which reproduce the run), `record` (counts, rebuilds, branch
    ends, the step log), `error` (kind, code, the failed child's own error) on failure,
-   and `execution.timings`.
+   and `execution.timings`. `compute` raises a failed output as `ProgramError`, which
+   carries it as `output`; `compute_batch` returns failures in place.
 
 ## Where to extend it
 
@@ -74,19 +84,25 @@ ProgramInput ──► api._prepare ──► algorithms (generators) ◄──�
   `CoordinateSystem`.
 - **An algorithm** (NEB, a string method, a dimer search): a generator that yields lists of
   `Ask` and returns a `RunResult`, wrapped in `algorithms.common.guarded` so an exception
-  keeps its frames; an options model in `options.py` and a calculation type in `api.py`.
-  It gets batching, every evaluator, the qcdata results and the error handling for free.
-- **An evaluator**: anything with `__call__(requests) -> answers` and
-  `supports_hessian(context)` (`driver.Evaluator`). For a program, write a qcdata
-  program with sessions instead: `SessionEvaluator` drives every such program, and
-  qccompute gives programs without sessions a session over `compute`.
+  keeps its frames; an options model in `options.py` and a calculation type in
+  `calculation.py`. It gets batching, child sessions, the qcdata results and the error
+  handling for free.
+- **A program to optimize on**: not here. Write an AFH program (`qccompute.program`),
+  with sessions if it carries state from step to step; qcopt reaches it through `ctx`,
+  and qccompute gives programs without sessions a session over `compute`.
+- **An evaluator** (the seam between the driver and programs, for tests): anything with
+  `__call__(requests) -> answers` and `supports_hessian(context)` (`driver.Evaluator`);
+  `calculation.run` takes one.
 
 ## Invariants
 
 - **Atomic units** (bohr, Hartree) at every boundary; qcref constants as `c.NAME`.
 - **Algorithms never call programs**; only evaluators do.
 - **Fail loudly, keep the frames**: unknown settings are errors; a run that fails or does
-  not converge returns `success=False` with its frames and a typed error.
+  not converge raises `ProgramError` carrying its output, with the frames and a typed
+  error.
+- **No route of its own**: children run on sessions from `ctx`, so the runner owns
+  resources, placement and the store.
 - **Behaviour is measured**: a change meant to keep results is checked bit for bit
   against golden trajectories (77 runs: model surfaces, minima, transition states and
   IRCs at GFN2/g-xTB, constraints, frozen atoms, Hessian programs, guide modes, batches);

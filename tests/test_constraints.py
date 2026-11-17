@@ -1,9 +1,10 @@
 import numpy as np
 import pytest
-from qcdata import Structure
+from qcdata import ProgramError, Structure
 
-import qcopt
 from qcopt import primitives as prim
+
+from .helpers import minimize
 
 axtb = pytest.importorskip("axtb")
 pytestmark = pytest.mark.axtb
@@ -37,7 +38,7 @@ BUTANE = Structure(
 
 @pytest.mark.parametrize("coordinates", ["cartesian", "tric"])
 def test_dihedral_and_distance_targets(coordinates):
-    out = qcopt.minimize(
+    out = minimize(
         BUTANE,
         GFN2,
         hessian_program=True,
@@ -57,7 +58,7 @@ def test_dihedral_and_distance_targets(coordinates):
 def test_keep_starting_angle():
     x0 = BUTANE.geometry
     a0 = prim.bend_values(x0, np.array([[0, 1, 2]]))[0]
-    out = qcopt.minimize(
+    out = minimize(
         BUTANE,
         GFN2,
         hessian_program=True,
@@ -70,5 +71,5 @@ def test_keep_starting_angle():
 
 
 def test_bad_constraint_is_an_error():
-    with pytest.raises(ValueError, match="bad atoms"):  # before anything is computed
-        qcopt.minimize(BUTANE, GFN2, constraints={"distance": [[0, 0]]})
+    with pytest.raises(ProgramError, match="bad atoms"):  # before anything is computed
+        minimize(BUTANE, GFN2, constraints={"distance": [[0, 0]]})

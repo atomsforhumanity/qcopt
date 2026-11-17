@@ -1,15 +1,13 @@
 """Evaluators: what computes the gradients and Hessians the optimizers ask for.
 
-- :class:`AxtbEvaluator` calls axtb in this process, one ``axtb.Calculator`` per
-  calculation, so each step starts from the previous wavefunction; calculations run
-  side by side in threads (axtb releases the GIL).
-- :class:`ComputeEvaluator` hands every request to qccompute (or any qccodec
-  ``Compute``), one list per round, so any program with a codec works and children
-  are batched or run side by side by the runner.
-- :class:`FunctionEvaluator` calls a Python function, for model surfaces and tests.
-- :func:`default_evaluator` picks for each task: axtb in-process, a program's own
-  sessions (:class:`qcopt.program.SessionEvaluator` over ``qccompute.session``), or
-  qccompute.
+qcopt has no route of its own to programs. Every gradient and Hessian comes from a
+session the runner opens (``RunContext.session``): the program's own sessions, which
+warm-start from step to step, or a session over its ``compute``
+(:class:`SessionEvaluator`).
+
+Until axtb has sessions of its own, axtb tasks run on :class:`AxtbEvaluator`: axtb in
+this process, one warm-started calculator per task. :func:`evaluator` sends them there
+and every other task to the sessions (:class:`RoutingEvaluator`).
 """
 
 from __future__ import annotations
@@ -24,9 +22,22 @@ from importlib import metadata
 from typing import Any
 
 import numpy as np
+from qccompute.program import RunContext, Session, capabilities_of, find_program
+from qcdata import (
+    CalcType,
+    ErrorInfo,
+    Frame,
+    ProgramError,
+    ProgramErrors,
+    ProgramInput,
+    ProgramSpec,
+    Provenance,
+    SinglePointData,
+    Structure,
+)
+from qcdata import Request as SessionRequest
 
 from .driver import Answer, Request, TaskContext
-from .geometry import Array
 
 
 def _version(package: str) -> str | None:
@@ -80,62 +91,6 @@ def summary(error: Any, traceback_text: str | None) -> str:
         if _EXCEPTION_LINE.match(line):
             return line
     return lines[-1] if lines else "the calculation failed"
-
-
-class FunctionEvaluator:
-    """Energies and gradients (optionally Hessians) from a Python function.
-
-    Args:
-        function: ``function(positions) -> (energy, gradient)``; positions ``(n, 3)``
-            in bohr, energy in Hartree, gradient ``(n, 3)`` in Hartree/bohr.
-        hessian: ``hessian(positions) -> (3n, 3n)`` array, or None for finite
-            differences of the gradient.
-        name: Program name recorded as the frames' provenance.
-    """
-
-    def __init__(
-        self,
-        function: Callable[[Array], tuple[float, Array]],
-        hessian: Callable[[Array], Array] | None = None,
-        name: str = "function",
-    ) -> None:
-        """Wrap the functions."""
-        self.function = function
-        self.hessian = hessian
-        self.name = name
-
-    def supports_hessian(self, context: TaskContext) -> bool:
-        """Whether a Hessian function was given."""
-        return self.hessian is not None
-
-    def __call__(self, requests: Sequence[Request]) -> list[Answer]:
-        """Evaluate each request."""
-        out = []
-        for r in requests:
-            x = np.asarray(r.positions, dtype=float)
-            try:
-                e, g = self.function(x)
-                h = self.hessian(x) if (r.kind == "hessian" and self.hessian) else None
-                out.append(
-                    Answer(
-                        positions=x,
-                        energy=float(e),
-                        gradient=np.asarray(g, dtype=float).reshape(-1, 3),
-                        hessian=None if h is None else np.asarray(h, dtype=float),
-                        program=self.name,
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001 - reported in the answer
-                out.append(
-                    Answer(
-                        positions=x,
-                        success=False,
-                        error=f"{type(exc).__name__}: {exc}",
-                        traceback=traceback.format_exc(),
-                        program=self.name,
-                    )
-                )
-        return out
 
 
 # axtb.Calculator keywords a ProgramSpec may set; everything else is rejected.
@@ -315,109 +270,6 @@ class AxtbEvaluator:
             del self._calcs[key]
 
 
-class ComputeEvaluator:
-    """Children computed by qccompute, or any qccodec ``Compute``, one list per round.
-
-    Args:
-        compute: ``compute(inputs: list[ProgramInput]) -> list[ProgramOutput]``;
-            default ``qccompute.compute``.
-    """
-
-    def __init__(self, compute: Callable[..., Any] | None = None) -> None:
-        """Bind the compute callable."""
-        if compute is None:
-            from qccompute import compute as qccompute_compute
-
-            def compute(inputs: Any) -> Any:
-                return qccompute_compute(inputs, raise_exc=False)
-
-        self.compute = compute
-
-    def supports_hessian(self, context: TaskContext) -> bool:
-        """Hessians come from the Hessian subprogram when one is given."""
-        return context.hessian_spec is not None
-
-    def __call__(self, requests: Sequence[Request]) -> list[Answer]:
-        """Compute all requests in one call."""
-        from qcdata import ProgramInput, Structure
-
-        inputs = []
-        for r in requests:
-            ctx = r.context
-            spec = ctx.hessian_spec if r.kind == "hessian" else ctx.gradient_spec
-            structure = ctx.extras.get("structure")
-            if structure is None:
-                structure = Structure(
-                    symbols=ctx.symbols,
-                    geometry=r.positions,
-                    charge=ctx.charge,
-                    multiplicity=ctx.multiplicity,
-                )
-            else:
-                structure = structure.model_copy(
-                    update={"geometry": np.asarray(r.positions, dtype=float)}
-                )
-            inputs.append(ProgramInput.from_spec(spec, structure))
-        outputs = self.compute(inputs)
-        if not isinstance(outputs, list):
-            outputs = [outputs]
-        return [
-            _compute_answer(r, out) for r, out in zip(requests, outputs, strict=True)
-        ]
-
-    def hessian_includes_gradient(self, context: TaskContext) -> bool:
-        """No: a codec's Hessian output need not carry the gradient (xtb's doesn't)."""
-        return False
-
-
-def _compute_answer(r: Request, out: Any) -> Answer:
-    """One request's answer from its ``ProgramOutput``; unreadable ones fail."""
-    x = np.asarray(r.positions, dtype=float)
-    res = getattr(out, "results", None)
-    prov = getattr(res, "provenance", None)
-    program = getattr(prov, "program", None)
-    version = getattr(prov, "program_version", None)
-    if not getattr(out, "success", False):
-        tb = getattr(out, "traceback", None)
-        return Answer(
-            positions=x,
-            success=False,
-            error=summary(getattr(out, "error", None), tb),
-            traceback=tb,
-            output=out,
-            program=program,
-            program_version=version,
-        )
-    try:
-        energy = getattr(res, "energy", None)
-        gradient = getattr(res, "gradient", None)
-        hessian = getattr(res, "hessian", None)
-        if r.kind == "gradient" and (energy is None or gradient is None):
-            raise ValueError("the output has no energy or gradient")
-        if r.kind == "hessian" and hessian is None:
-            raise ValueError("the output has no Hessian")
-        return Answer(
-            positions=x,
-            energy=float("nan") if energy is None else float(energy),
-            gradient=None
-            if gradient is None
-            else np.asarray(gradient, dtype=float).reshape(-1, 3),
-            hessian=None if hessian is None else np.asarray(hessian, dtype=float),
-            output=out,
-            program=program,
-            program_version=version,
-        )
-    except Exception as exc:  # noqa: BLE001 - reported in the answer
-        return Answer(
-            positions=x,
-            success=False,
-            error=f"reading the {program or 'program'} output: {exc}",
-            output=out,
-            program=program,
-            program_version=version,
-        )
-
-
 class RoutingEvaluator:
     """Sends each task to the evaluator chosen for it; one call per evaluator."""
 
@@ -485,22 +337,22 @@ class RoutingEvaluator:
         return [a for a in answers if a is not None]
 
 
-def has_sessions(name: str) -> bool:
-    """Whether ``name`` is a registered program with sessions of its own."""
-    from qccompute.program import capabilities_of, find_program
-
-    program = find_program(name)
-    return program is not None and capabilities_of(program).sessions
+def same_spec(a: ProgramSpec, b: ProgramSpec) -> bool:
+    """Whether two specs differ only in their calculation type."""
+    return a.model_copy(update={"calctype": b.calctype}) == b
 
 
 def axtb_in_process(context: TaskContext) -> bool:
     """Whether a task runs on qcopt's own axtb evaluator.
 
-    Until axtb is a program with sessions, a session over axtb's codec would make every
-    gradient a separate calculation (30x slower on small molecules); qcopt's
-    in-process evaluator keeps one warm-started axtb calculator per task instead.
+    Only until axtb is a program with sessions: a session over axtb's ``compute`` would
+    make every gradient a separate calculation (30x slower on small molecules), where
+    qcopt's in-process evaluator keeps one warm-started calculator per task.
     """
-    if not AxtbEvaluator.handles(context) or has_sessions("axtb"):
+    if not AxtbEvaluator.handles(context):
+        return False
+    program = find_program("axtb")
+    if program is not None and capabilities_of(program).sessions:
         return False
     try:
         import axtb  # noqa: F401
@@ -509,44 +361,261 @@ def axtb_in_process(context: TaskContext) -> bool:
     return True
 
 
-def _sessions() -> Any:
-    """Sessions opened through ``qccompute.session``."""
-    import qccompute
+def evaluator(
+    contexts: Sequence[TaskContext], ctx: RunContext
+) -> SessionEvaluator | RoutingEvaluator:
+    """What computes each task: sessions from ``ctx``, axtb in process until it has its own.
 
-    from .program import SessionEvaluator
+    Args:
+        contexts: The tasks.
+        ctx: The runner's context: the grant and the way to open child sessions.
 
-    return SessionEvaluator(
-        lambda inp, threads, calctypes: qccompute.session(
-            inp, threads=threads, calctypes=calctypes
-        )
+    Returns:
+        The evaluator; ``close()`` closes the sessions it opened.
+    """
+
+    def open_session(
+        inp: ProgramInput, threads: int | None, calctypes: set[str]
+    ) -> Session:
+        return ctx.session(inp, threads=threads, calctypes=calctypes)
+
+    sessions = SessionEvaluator(open_session, ctx.threads)
+    in_process = [axtb_in_process(c) for c in contexts]
+    if not any(in_process):
+        return sessions
+    return RoutingEvaluator(
+        [AxtbEvaluator(workers=1), sessions],
+        [0 if a else 1 for a in in_process],
+        contexts,
     )
 
 
-def default_evaluator(contexts: Sequence[TaskContext]) -> Any:
-    """What computes each task when no evaluator is given.
+#: Opens a session: (input, threads, calctypes) -> Session, as ``RunContext.open_session``.
+OpenSession = Callable[[ProgramInput, "int | None", "set[str]"], Session]
 
-    - axtb tasks: axtb in this process (:func:`axtb_in_process`);
-    - tasks whose gradient program has sessions of its own: one session per task and
-      program through ``qccompute.session``, so each step starts from the last (its
-      orbitals, its probe state);
-    - every other task: ``qccompute.compute``, a round's calculations in one call.
+
+class SessionEvaluator:
+    """Gradients and Hessians from program sessions: one per task and program.
+
+    Each task's requests of a round go to its sessions in one ``compute_many`` call
+    (so the 6N displaced gradients of a finite-difference Hessian are one batch);
+    tasks run side by side in threads (the runner makes that safe), as many at a time
+    as the granted threads allow. A request continues its lineage's history (the
+    task, and the IRC branch); the displaced gradients of a finite-difference Hessian
+    start from the centre's and do not become history. A task's sessions close when it
+    finishes.
+
+    Args:
+        open_session: Opens a session from the child's input (its spec at the task's
+            starting structure), its threads and the calctypes it serves:
+            ``RunContext.open_session``, or ``qccompute.session`` with those keywords.
+        threads: The threads to share among the tasks' sessions (None: the
+            programs' own settings).
     """
-    makers: dict[str, Callable[[], Any]] = {
-        "axtb": AxtbEvaluator,
-        "sessions": _sessions,
-        "compute": ComputeEvaluator,
-    }
-    kinds = [
-        "axtb"
-        if axtb_in_process(ctx)
-        else "sessions"
-        if has_sessions(ctx.gradient_spec.program)
-        else "compute"
-        for ctx in contexts
+
+    def __init__(self, open_session: OpenSession, threads: int | None = None) -> None:
+        """Bind the session opener; no session is opened yet."""
+        self.open_session = open_session
+        self.threads = threads
+        self._sessions: dict[tuple[int, str], Session] = {}
+        self._tasks: set[int] = set()
+
+    def supports_hessian(self, context: TaskContext) -> bool:
+        """Hessians come from the Hessian subprogram's session when one is given."""
+        return context.hessian_spec is not None
+
+    def hessian_includes_gradient(self, context: TaskContext) -> bool:
+        """Yes: a session's Hessian comes with the energy and gradient."""
+        return True
+
+    def _share(self, n_tasks: int) -> int | None:
+        if self.threads is None:
+            return None
+        return max(1, self.threads // max(1, n_tasks))
+
+    @staticmethod
+    def _role(r: Request) -> tuple[str, ProgramSpec]:
+        """The session a request goes to: its role, and the program spec it opens."""
+        ctx = r.context
+        if r.kind == "hessian" and ctx.hessian_spec is not None:
+            if not same_spec(ctx.hessian_spec, ctx.gradient_spec):
+                return "hessian", ctx.hessian_spec
+        return "gradient", ctx.gradient_spec
+
+    def _session(self, r: Request, n_tasks: int) -> Session:
+        ctx = r.context
+        role, spec = self._role(r)
+        key = (r.task, role)
+        if key not in self._sessions:
+            structure = ctx.extras.get("structure") or Structure(
+                symbols=ctx.symbols,
+                geometry=r.positions,
+                charge=ctx.charge,
+                multiplicity=ctx.multiplicity,
+            )
+            # the calctypes this session serves: the gradient program's also the
+            # Hessians when they come from the same calculation
+            calctypes = {role}
+            if role == "gradient" and ctx.hessian_spec is not None:
+                if same_spec(ctx.hessian_spec, ctx.gradient_spec):
+                    calctypes.add("hessian")
+            self._sessions[key] = self.open_session(
+                ProgramInput.from_spec(spec, structure),
+                self._share(n_tasks),
+                calctypes,
+            )
+        return self._sessions[key]
+
+    def _workers(self, tasks: Sequence[list[int]], requests: Sequence[Request]) -> int:
+        """How many tasks run at once: all, or as many as the granted threads allow.
+
+        A task needs its share of the grant, or the threads its programs' settings ask
+        for (``threads``; a program run through ``qccompute.compute`` takes those),
+        whichever is more.
+        """
+        if self.threads is None:
+            return len(tasks)
+        share = self._share(len(tasks)) or 1
+        need = max(
+            max([share] + [_threads(self._role(requests[k])[1]) for k in ks])
+            for ks in tasks
+        )
+        return max(1, min(len(tasks), self.threads // need))
+
+    def __call__(self, requests: Sequence[Request]) -> list[Answer]:
+        """Compute a round: each task's requests in order, tasks side by side."""
+        by_task: dict[int, list[int]] = defaultdict(list)
+        for k, r in enumerate(requests):
+            by_task[r.task].append(k)
+        n_tasks = len(by_task)
+        answers: list[Answer | None] = [None] * len(requests)
+
+        def run_task(indices: list[int]) -> None:
+            by_session: dict[int, tuple[Session, list[int]]] = {}
+            for k in indices:
+                try:
+                    session = self._session(requests[k], n_tasks)
+                except Exception as exc:  # noqa: BLE001 - this request's answer
+                    # the program refused its settings or could not start: this
+                    # task's request fails with the program's error, not the round
+                    answers[k] = _not_opened(
+                        requests[k], self._role(requests[k])[1], exc
+                    )
+                    continue
+                by_session.setdefault(id(session), (session, []))[1].append(k)
+            for session, ks in by_session.values():
+                frames = _compute_many(session, [requests[k] for k in ks])
+                for k, frame in zip(ks, frames, strict=True):
+                    answers[k] = _answer(requests[k], frame, session)
+
+        workers = self._workers(list(by_task.values()), requests)
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                list(pool.map(run_task, by_task.values()))
+        else:
+            for indices in by_task.values():
+                run_task(indices)
+        return [a for a in answers if a is not None]
+
+    def forget(self, task: int) -> None:
+        """Close a finished task's sessions."""
+        for key in [k for k in self._sessions if k[0] == task]:
+            self._sessions.pop(key).close()
+
+    def close(self) -> None:
+        """Close every session."""
+        for session in self._sessions.values():
+            session.close()
+        self._sessions.clear()
+
+
+def _threads(spec: ProgramSpec) -> int:
+    """The threads a spec's settings ask for (1 if they do not say)."""
+    threads = spec.keywords.get("threads")
+    return threads if isinstance(threads, int) and threads > 0 else 1
+
+
+def _compute_many(session: Session, requests: Sequence[Request]) -> list[Frame]:
+    """One session's requests as session requests, one frame each, failures in place.
+
+    A session runs every request, then raises ``ProgramErrors`` holding every frame in
+    order when some failed. One that raises anything else fails every request.
+    """
+    batch = [
+        SessionRequest(
+            positions=np.asarray(r.positions, dtype=float).reshape(-1, 3),
+            calctype=CalcType(r.kind),
+            lineage=(r.task, r.lineage),
+            commit=r.commit,
+        )
+        for r in requests
     ]
-    used = [k for k in makers if k in kinds]
-    if len(used) == 1:
-        return makers[used[0]]()
-    return RoutingEvaluator(
-        [makers[k]() for k in used], [used.index(k) for k in kinds], contexts
+    try:
+        return session.compute_many(batch)
+    except ProgramErrors as group:
+        return list(group.results)
+    except ProgramError as exc:
+        return [_failed(r, exc.error) for r in requests]
+    except Exception as exc:  # noqa: BLE001 - reported in the answers
+        error = ErrorInfo(kind="internal", message=f"{type(exc).__name__}: {exc}")
+        return [_failed(r, error) for r in requests]
+
+
+def _not_opened(r: Request, spec: ProgramSpec, exc: Exception) -> Answer:
+    """A request whose session could not be opened, failed with the program's error."""
+    error = (
+        exc.error
+        if isinstance(exc, ProgramError)
+        else ErrorInfo(kind="internal", message=f"{type(exc).__name__}: {exc}")
+    )
+    return Answer(
+        positions=np.asarray(r.positions, dtype=float),
+        success=False,
+        error=summary(error, None),
+        output=_failed(r, error, spec.program),
+        program=spec.program,
+    )
+
+
+def _failed(r: Request, error: ErrorInfo, program: str = "unknown") -> Frame:
+    ctx = r.context
+    structure = Structure(
+        symbols=ctx.symbols,
+        geometry=np.asarray(r.positions, dtype=float),
+        charge=ctx.charge,
+        multiplicity=ctx.multiplicity,
+    )
+    return Frame(
+        success=False,
+        traceback=error.message,
+        error=error,
+        structure=structure,
+        results=SinglePointData(provenance=Provenance(program=program)),
+    )
+
+
+def _answer(r: Request, frame: Frame, session: Session) -> Answer:
+    """A frame from a session as the driver's answer (the frame becomes its output)."""
+    x = np.asarray(r.positions, dtype=float)
+    res = frame.results
+    if not frame.success:
+        return Answer(
+            positions=x,
+            success=False,
+            error=summary(frame.error, frame.traceback),
+            traceback=frame.traceback,
+            output=frame,
+            program=session.program,
+            program_version=session.program_version,
+        )
+    return Answer(
+        positions=x,
+        energy=float("nan") if res.energy is None else float(res.energy),
+        gradient=None
+        if res.gradient is None
+        else np.asarray(res.gradient, dtype=float).reshape(-1, 3),
+        hessian=None if res.hessian is None else np.asarray(res.hessian, dtype=float),
+        output=frame,
+        program=session.program,
+        program_version=session.program_version,
     )

@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 from qcdata import Structure
 
-import qcopt
 from qcopt.driver import Answer
 
+from .helpers import FunctionEvaluator, find_ts, minimize
 from .surfaces import MB_SADDLES, muller_brown, muller_brown_hessian
 
 SPEC = {"program": "muller-brown"}
@@ -56,14 +56,9 @@ class TwoLevels:
         return out
 
 
-def test_hessian_argument_is_the_program_not_the_starting_hessian():
-    with pytest.raises(ValueError, match="names the program computing Hessians"):
-        qcopt.minimize(_structure(0.3, 0.2), SPEC, hessian_program="model")
-
-
 def test_initial_hessian_keyword_reaches_the_helpers():
-    ev = qcopt.FunctionEvaluator(muller_brown, muller_brown_hessian)
-    out = qcopt.minimize(
+    ev = FunctionEvaluator(muller_brown, muller_brown_hessian)
+    out = minimize(
         _structure(0.3, 0.2),
         SPEC,
         hessian_program=True,
@@ -79,7 +74,7 @@ def test_initial_hessian_keyword_reaches_the_helpers():
 @pytest.mark.parametrize("every", [0, 1])
 def test_lower_level_hessians_keep_the_target_energies(every):
     ev = TwoLevels()
-    out = qcopt.find_ts(
+    out = find_ts(
         _structure(-0.7, 0.6),
         SPEC,
         hessian_program=LOW,
@@ -104,7 +99,7 @@ def test_lower_level_hessians_keep_the_target_energies(every):
 
 
 def test_lower_level_hessians_need_an_evaluator_that_computes_them():
-    ev = qcopt.FunctionEvaluator(muller_brown)  # gradients only
-    out = qcopt.find_ts(_structure(-0.7, 0.6), SPEC, hessian_program=LOW, evaluator=ev)
+    ev = FunctionEvaluator(muller_brown)  # gradients only
+    out = find_ts(_structure(-0.7, 0.6), SPEC, hessian_program=LOW, evaluator=ev)
     assert not out.success
     assert "cannot compute Hessians" in out.traceback

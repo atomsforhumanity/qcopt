@@ -1,24 +1,27 @@
-"""Starting from results already known: ``ProgramInput.given`` and ``irc(search)``."""
+"""Starting from results already known: ``ProgramInput.given``."""
 
 import numpy as np
 import pytest
-from qcdata import SinglePointData, Structure
+from qcdata import ProgramError, SinglePointData, Structure
 
 import qcopt
 
+from .helpers import FunctionProgram, qcopt_input, registered
 from .surfaces import MB_MINIMA, muller_brown, muller_brown_hessian
 
 SPEC = {"program": "muller-brown"}
 
 
+@pytest.fixture(autouse=True)
+def muller_brown_program():
+    with registered(
+        FunctionProgram("muller-brown", muller_brown, muller_brown_hessian)
+    ):
+        yield
+
+
 def _structure(x, y):
     return Structure(symbols=["H"], geometry=[[x, y, 0.0]])
-
-
-def _evaluator():
-    return qcopt.FunctionEvaluator(
-        muller_brown, muller_brown_hessian, name="muller-brown"
-    )
 
 
 def _known(x, y, point=True, program="muller-brown", **more):
@@ -33,36 +36,34 @@ def _known(x, y, point=True, program="muller-brown", **more):
     )
 
 
-def _irc(start, **kw):
-    return qcopt.irc(
-        start,
-        SPEC,
-        hessian_program=True,
-        evaluator=_evaluator(),
-        irc={"step": 0.05},
-        **kw,
+def _irc(structure, given=None):
+    return qcopt.compute(
+        qcopt_input(
+            "irc",
+            structure,
+            SPEC,
+            hessian_program=True,
+            given=given,
+            irc={"step": 0.05},
+        )
     )
 
 
-@pytest.fixture(scope="module")
-def search():
-    out = qcopt.find_ts(
-        _structure(-0.7, 0.6),
-        SPEC,
-        hessian_program=True,
-        evaluator=_evaluator(),
-        trust={"radius": 0.1},
-        freq={"check": True},
+def test_an_irc_starts_from_its_search_s_transition_state_hessian():
+    search = qcopt.compute(
+        qcopt_input(
+            "transition_state",
+            _structure(-0.7, 0.6),
+            SPEC,
+            hessian_program=True,
+            trust={"radius": 0.1},
+            freq={"check": True},
+        )
     )
-    assert out.success, out.traceback
-    assert out.results.frames[-1].results.hessian is not None
-    return out
-
-
-def test_an_irc_from_a_search_does_not_compute_its_hessian_again(search):
-    fresh = _irc(search.results.final_structure)
-    reused = _irc(search)
-    assert reused.success, reused.traceback
+    last = search.results.frames[-1]
+    assert last.results.hessian is not None  # freq.check
+    fresh = _irc(last.structure)
+    reused = _irc(last.structure, given=last.results)
     assert fresh.resolved.settings["hessian"]["initial"] == "exact"
     assert reused.resolved.settings["hessian"]["initial"] == "given"
     assert "muller-brown" in reused.resolved.reasons["hessian.initial"]
@@ -75,48 +76,13 @@ def test_an_irc_from_a_search_does_not_compute_its_hessian_again(search):
         assert a.results.energy == b.results.energy
 
 
-def test_an_irc_reuses_only_the_hessian_it_would_compute(search):
-    other = {"program": "muller-brown", "model": {"method": "another"}}
-    out = qcopt.irc(
-        search, other, hessian_program=True, evaluator=_evaluator(), irc={"step": 0.05}
-    )
-    assert out.input_data.given is None
-    assert out.resolved.settings["hessian"]["initial"] == "exact"
-    # another gradient program, the same Hessian program as the search's
-    out = qcopt.irc(
-        search, other, hessian_program=SPEC, evaluator=_evaluator(), irc={"step": 0.05}
-    )
-    assert out.input_data.given.hessian is not None
-
-
-def test_an_irc_from_a_search_without_frequencies_computes_the_hessian():
-    out = qcopt.find_ts(
-        _structure(-0.7, 0.6), SPEC, hessian_program=True, evaluator=_evaluator()
-    )
-    irc = _irc(out)
-    assert irc.input_data.given is None
-    assert irc.resolved.settings["hessian"]["initial"] == "exact"
-
-
-def test_an_irc_does_not_start_from_a_failed_search():
-    out = qcopt.find_ts(
-        _structure(-0.7, 0.6),
-        SPEC,
-        hessian_program=True,
-        evaluator=_evaluator(),
-        convergence={"max_iter": 1},
-    )
-    assert not out.success
-    with pytest.raises(qcopt.InputError, match="did not succeed"):
-        _irc(out)
-
-
 def test_a_given_frame_s_results_start_a_run_as_they_stand():
     # every field a program's frame carries; qcopt uses the Hessian, from any program
     x, y = -0.4, 1.2
     known = _known(x, y, program="cheap", scf_iterations=7, calcinfo_natoms=1)
-    out = qcopt.minimize(_structure(x, y), SPEC, given=known, evaluator=_evaluator())
-    assert out.success, out.traceback
+    out = qcopt.compute(
+        qcopt_input("optimization", _structure(x, y), SPEC, given=known)
+    )
     assert out.resolved.settings["hessian"]["initial"] == "given"
     assert out.resolved.reasons["hessian.initial"] == "the given Hessian (cheap)"
     assert np.allclose(
@@ -146,8 +112,10 @@ def test_a_given_frame_s_results_start_a_run_as_they_stand():
     ],
 )
 def test_given_results_qcopt_cannot_use_are_refused(given, keywords, match, code):
-    with pytest.raises(qcopt.InputError, match=match) as info:
-        qcopt.minimize(
-            _structure(0.0, 0.5), SPEC, given=given, evaluator=_evaluator(), **keywords
+    with pytest.raises(ProgramError, match=match) as info:
+        qcopt.compute(
+            qcopt_input(
+                "optimization", _structure(0.0, 0.5), SPEC, given=given, **keywords
+            )
         )
-    assert info.value.code == code
+    assert (info.value.error.kind, info.value.error.code) == ("input", code)

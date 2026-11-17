@@ -2,8 +2,10 @@ import numpy as np
 import pytest
 from qcdata import Structure
 
-import qcopt
 from qcopt.geometry import rmsd
+from qcopt.vibrations import frequencies
+
+from .helpers import find_ts, irc, minimize, run
 
 axtb = pytest.importorskip("axtb")
 pytestmark = pytest.mark.axtb
@@ -23,7 +25,7 @@ HCN_TS_GUESS = Structure(
 
 
 def test_water_minimum_in_process():
-    out = qcopt.minimize(WATER, GFN2, hessian_program=True, freq={"check": True})
+    out = minimize(WATER, GFN2, hessian_program=True, freq={"check": True})
     assert out.success, out.traceback
     assert out.record["n_imaginary"] == 0
     f = out.results.frames[-1]
@@ -32,10 +34,10 @@ def test_water_minimum_in_process():
 
 
 def test_hcn_isomerization_ts_and_irc():
-    ts = qcopt.find_ts(HCN_TS_GUESS, GFN2, hessian_program=True, freq={"check": True})
+    ts = find_ts(HCN_TS_GUESS, GFN2, hessian_program=True, freq={"check": True})
     assert ts.success, ts.traceback
     assert ts.record["n_imaginary"] == 1
-    path = qcopt.irc(
+    path = irc(
         ts.results.final_structure, GFN2, hessian_program=True, irc={"step": 0.15}
     )
     assert path.success, path.traceback
@@ -72,8 +74,8 @@ def test_lockstep_minimizations_match_single_runs():
         )
         for s in (WATER, shifted)
     ]
-    together = qcopt.run(inputs)
-    alone = [qcopt.run(i) for i in inputs]
+    together = run(inputs)
+    alone = [run(i) for i in inputs]
     for a, b in zip(together, alone, strict=True):
         assert a.success and b.success
         assert np.allclose(
@@ -92,7 +94,7 @@ GXTB = {
 
 def test_gxtb_ts_from_gfn2_hessians():
     """g-xTB gradients with GFN2 Hessians: frames hold g-xTB energies throughout."""
-    ts = qcopt.find_ts(
+    ts = find_ts(
         HCN_TS_GUESS, GXTB, hessian_program=GFN2, hessian={"recompute_every": 2}
     )
     assert ts.success, ts.traceback
@@ -106,7 +108,5 @@ def test_gxtb_ts_from_gfn2_hessians():
         assert frame.results.hessian is None
     # A g-xTB Hessian at the result: still a first-order saddle.
     h = check.hessian(ts.results.final_structure.geometry, vibrations=False)["hessian"]
-    f = qcopt.frequencies(
-        np.asarray(h), ["C", "N", "H"], ts.results.final_structure.geometry
-    )
+    f = frequencies(np.asarray(h), ["C", "N", "H"], ts.results.final_structure.geometry)
     assert f.n_imaginary(10.0) == 1

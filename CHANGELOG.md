@@ -13,6 +13,29 @@ programs, guide modes, batched runs).
 
 ### Changed
 
+- **qcopt's Python interface is `qcopt.compute(inp)`** (AFH's program interface): a
+  qcdata `ProgramInput` in, a `ProgramOutput` out. `run`, `minimize`, `find_ts`, `irc`,
+  the evaluators (`FunctionEvaluator`, `AxtbEvaluator`, `ComputeEvaluator`) and the
+  `evaluator=` argument are gone, and so are the top-level exports of the settings
+  models, `default_options`, `options_schema`, `frequencies`, `drive` and the driver's
+  types (all still in their modules). Many inputs at once go through a runner,
+  `qccompute.compute([...])`, which runs them in lockstep. From 0.2:
+  - `qcopt.minimize(s, spec, hessian=h, **kw)` →
+    `qcopt.compute(ProgramInput(program="qcopt", calctype="optimization", structure=s,
+    keywords=kw, subprograms=[{**spec, "calctype": "gradient"},
+    {**h, "calctype": "hessian"}]))` (`find_ts`: `transition_state`; `irc`: `irc`);
+  - an IRC from a search: `structure=last.structure, given=last.results` with
+    `last = search.results.frames[-1]` (the search ran with `freq.check`);
+  - a Python function as the surface: register it as a program
+    (`qccompute.program.register_program`).
+- **A failed calculation raises** `qcdata.ProgramError` (was a `success=False` output):
+  `error.kind` and `code` as before, and `output`, the failed output with its frames,
+  `record` and `resolved` settings. An input qcopt cannot run raises it with kind
+  `input` (was `qcopt.InputError`). `compute_batch` returns failures in place.
+- **qcopt has no route of its own to programs.** Every gradient and Hessian comes from
+  a child session the runner opens; called directly, qcopt opens them as
+  `qccompute.session` does, so any program qccompute runs is a child. Until axtb has
+  sessions of its own, qcopt still runs axtb in this process.
 - **Settings come in groups**, one options model per calculation type
   (`OptimizationOptions`, `TransitionStateOptions`, `IRCOptions`), with the rules shared
   with axtb and linus. The 0.2 keywords and where they went:
@@ -40,14 +63,12 @@ programs, guide modes, batched runs).
 
   A 0.2 keyword is an error that names its new place; another misspelling suggests the
   closest setting.
-- **`minimize`, `find_ts` and `irc` take `program` and `hessian_program=`** (was
-  `gradient` and `hessian=`): `hessian` is now the settings group.
 - **Results use qcdata's standard slots** (qcdata 0.24): `resolved` (`settings` with
   every `auto` replaced, which reproduce the run, and `reasons`), `record` (the counts
   and diagnostics 0.2 put in `extras`, IRC `branches` and `ends`), `error`
   (`kind`: `input`, `program`, `convergence`, `numerical`, `internal`; `code`, such as
   `max_iter` or `not_first_order_saddle`; for a failed gradient or Hessian calculation
-  its `program` and its own error as `cause`) and `execution.timings` (`evaluator`,
+  its `program` and its own error as `cause`) and `execution.timings` (`subprograms`,
   `optimizer`, `total`); `warnings` stays empty. An IRC branch that runs out of steps
   ends with `max_iter` (was `max_steps`).
 - Settings of another calculation type, and settings given that cannot affect the
@@ -56,11 +77,9 @@ programs, guide modes, batched runs).
   subprogram, ...), are errors; so are saddle escapes with distance, angle or dihedral
   constraints, which 0.2 skipped silently. Settings that act only if a condition arises
   are allowed. `resolved.settings` leaves out settings that cannot take effect.
-- Errors in the input raise `qcopt.InputError` (a `ValueError`) before anything is
-  computed.
+- Errors in the input are found before anything is computed.
 - **qccompute is a dependency** (it holds AFH's program protocol); the `qcopt[qccompute]`
   extra and qcopt's qccodec codec are gone: qccompute runs qcopt as a native program.
-- `irc`'s first argument is `start` (a structure, or `find_ts`'s output).
 
 ### Added
 
@@ -81,25 +100,20 @@ programs, guide modes, batched runs).
   the batch. Calculations run side by side, as many at a time as the granted threads
   allow (qccompute makes concurrent sessions safe); the displaced gradients of a
   finite-difference Hessian start from the centre's calculation and do not become its
-  lineage's history (`commit=False`). Input errors carry AFH's codes (`InputError.code`,
-  `error.code`: `unknown_key`, `not_applicable`, `no_effect`).
-- **Starting from a known Hessian** (`ProgramInput.given`, `given=`): the given
+  lineage's history (`commit=False`). Input errors carry AFH's codes (`error.code`:
+  `unknown_key`, `not_applicable`, `no_effect`).
+- **Starting from a known Hessian** (`ProgramInput.given`): the given
   Hessian, from any program, is an optimization's initial one or an IRC's at the
   transition state (`hessian.initial` `given`, what `auto` becomes when there is one;
   `resolved.reasons` names its program). It is a starting guess: energies and gradients
   are computed, and no frame holds it. Other given fields are left alone; given results
-  without a Hessian are an error (`not_applicable`). `qcopt.irc(ts_output, ...)` starts
-  from `find_ts`'s output and reuses its last frame's Hessian (`freq.check`) when it
-  would compute the same one (the same Hessian program, method and settings).
-- Without an `evaluator`, `qcopt.run` (and `minimize`, `find_ts`, `irc`) computes a
-  program with sessions of its own through them (`qccompute.session`), so each step
-  starts from the last instead of from scratch; axtb still runs in this process and
-  other programs through `qccompute.compute` (`qcopt.evaluators.default_evaluator`
-  chooses per calculation).
+  without a Hessian are an error (`not_applicable`). An IRC from a search with
+  `freq.check` passes the search's last frame's `results` as `given`: one gradient at
+  the transition state instead of a Hessian, and the same path.
 - `Ask.lineage` and `Request.lineage`; evaluators may define `forget(task)`, called when
   a task finishes.
-- `qcopt.default_options(calctype)`, `qcopt.options_schema(calctype)` (JSON Schema with
-  units and tiers), `docs/settings.md` (generated from the models) and
+- The settings' JSON Schema with units and tiers (`settings_schema(calctype)` of the
+  program), `docs/settings.md` (generated from the models) and
   `docs/choosing-settings.md` (the benchmark evidence behind the defaults).
 - `ARCHITECTURE.md`.
 

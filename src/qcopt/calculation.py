@@ -1,12 +1,17 @@
-"""Running qcopt: ``ProgramInput`` in, ``ProgramOutput`` out.
+"""One qcopt calculation: a ``ProgramInput`` checked, run, and its ``ProgramOutput``.
 
 A qcopt calculation is a qcdata ``ProgramInput`` with ``program="qcopt"``, a
 calculation type (``optimization``, ``transition_state`` or ``irc``), a structure,
-qcopt's settings as ``keywords`` (:mod:`qcopt.options`), and subprograms: one
+qcopt's settings as ``keywords`` (:mod:`qcopt.options`), subprograms (one
 ``ProgramSpec`` with ``calctype="gradient"``, and optionally one with
-``calctype="hessian"``. The result is a ``ProgramOutput`` holding
-``OptimizationData`` (minima and transition states) or ``PathData`` (IRCs), every
-frame with the energy and gradient computed there, and qcdata's standard slots:
+``calctype="hessian"``), and optionally ``given`` results at the structure, whose
+Hessian is the starting one. :func:`prepare` checks an input before anything is
+computed; :func:`run` runs prepared calculations in lockstep on an evaluator
+(:mod:`qcopt.evaluators`). :mod:`qcopt.program` is the entry point.
+
+The result is a ``ProgramOutput`` holding ``OptimizationData`` (minima and transition
+states) or ``PathData`` (IRCs), every frame with the energy and gradient computed
+there, and qcdata's standard slots:
 
 - ``resolved``: ``settings``, the settings with every ``auto`` replaced (a valid
   ``keywords`` that reproduces the run), and ``reasons``, why each was chosen;
@@ -15,7 +20,7 @@ frame with the energy and gradient computed there, and qcdata's standard slots:
 - ``error``, on failure: ``kind`` (:mod:`qcopt.errors`), ``message``, ``code`` (such
   as ``max_iter``), and for a failed gradient or Hessian calculation its ``program``
   and its own error (``cause``);
-- ``execution.timings``: ``evaluator`` (seconds in the gradient and Hessian
+- ``execution.timings``: ``subprograms`` (seconds in the gradient and Hessian
   programs), ``optimizer`` (qcopt's own), ``total``.
 """
 
@@ -27,10 +32,9 @@ import traceback
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from importlib import metadata
-from typing import Any, overload
+from typing import Any
 
 import numpy as np
-from pydantic import BaseModel
 from qcdata import (
     CalcType,
     ErrorInfo,
@@ -52,9 +56,9 @@ from qcref import periodic_table as pt
 from . import algorithms
 from .algorithms.common import RunResult, resolve_initial_hessian
 from .constraints import ConstraintSet
-from .driver import Answer, TaskContext, drive
+from .driver import Answer, Evaluator, TaskContext, drive
 from .errors import InputError
-from .evaluators import default_evaluator, surface_keywords
+from .evaluators import surface_keywords
 from .geometry import Array
 from .options import (
     IRCOptions,
@@ -101,11 +105,6 @@ def _same_method(grad: ProgramSpec, hess: ProgramSpec | None) -> bool:
     return hess is None or (hess.program == grad.program and hess.model == grad.model)
 
 
-def _same_spec(a: ProgramSpec, b: ProgramSpec) -> bool:
-    """Whether two specs differ only in their calculation type."""
-    return a.model_copy(update={"calctype": b.calctype}) == b
-
-
 def _given_hessian(inp: ProgramInput) -> tuple[Array, str] | None:
     """The Hessian of the input's given results, and where it came from.
 
@@ -133,7 +132,7 @@ def _given_hessian(inp: ProgramInput) -> tuple[Array, str] | None:
 
 
 @dataclass
-class _Prepared:
+class Prepared:
     """One input, checked: its settings, what ``auto`` became, its task context."""
 
     inp: ProgramInput
@@ -219,7 +218,7 @@ def _resolve(
     return settings, reasons
 
 
-def _prepare(inp: ProgramInput) -> _Prepared:
+def prepare(inp: ProgramInput) -> Prepared:
     """Check one input before anything is computed.
 
     Raises:
@@ -283,7 +282,7 @@ def _prepare(inp: ProgramInput) -> _Prepared:
     resolved, reasons = _resolve(
         options, len(s.symbols), hess is not None, None if given is None else given[1]
     )
-    return _Prepared(
+    return Prepared(
         inp=inp,
         options=options,
         context=ctx,
@@ -294,7 +293,7 @@ def _prepare(inp: ProgramInput) -> _Prepared:
     )
 
 
-def _algorithm(p: _Prepared) -> algorithms.common.Algorithm:
+def _algorithm(p: Prepared) -> algorithms.common.Algorithm:
     s = p.inp.require_structure()
     has_h = p.context.hessian_spec is not None
     if isinstance(p.options, IRCOptions):
@@ -385,7 +384,7 @@ def _cause(answer: Answer | None) -> tuple[str | None, ErrorInfo | None]:
 
 
 def _output(
-    p: _Prepared, result: RunResult | BaseException, timings: dict[str, float]
+    p: Prepared, result: RunResult | BaseException, timings: dict[str, float]
 ) -> ProgramOutput[ProgramInput, Any]:
     inp = p.inp
     s = inp.require_structure()
@@ -466,243 +465,27 @@ def _output(
     )
 
 
-@overload
 def run(
-    inputs: ProgramInput, *, evaluator: Any = None
-) -> ProgramOutput[ProgramInput, Any]: ...
-@overload
-def run(
-    inputs: Sequence[ProgramInput], *, evaluator: Any = None
-) -> list[ProgramOutput[ProgramInput, Any]]: ...
+    prepared: Sequence[Prepared], evaluator: Evaluator
+) -> list[ProgramOutput[ProgramInput, Any]]:
+    """Run checked calculations in lockstep on one evaluator.
 
-
-def run(inputs: ProgramInput | Sequence[ProgramInput], *, evaluator: Any = None) -> Any:
-    """Run one qcopt calculation, or several together.
-
-    Several calculations advance in lockstep, and each round's gradients and
-    Hessians, from all of them, go to the evaluator in one call: batched or side by
-    side.
+    Each round's gradients and Hessians, from all of them, go to the evaluator in one
+    call, to be batched or run side by side.
 
     Args:
-        inputs: One ``ProgramInput`` or a list.
-        evaluator: What computes gradients and Hessians (:mod:`qcopt.evaluators`);
-            default (:func:`~qcopt.evaluators.default_evaluator`): axtb in this
-            process, a program's own sessions, or qccompute.
+        prepared: The calculations, checked by :func:`prepare`.
+        evaluator: What computes their gradients and Hessians.
 
     Returns:
-        One ``ProgramOutput`` or a list in input order. A calculation that fails or
-        does not converge has ``success=False``, keeps its frames, and says why in
-        its typed ``error`` (and ``traceback``).
-
-    Raises:
-        InputError: An input qcopt cannot run (wrong program or calculation type,
-            missing gradient subprogram, unknown or invalid settings), checked for
-            every input before anything is computed.
+        One output per calculation, in order. One that fails or does not converge has
+        ``success=False``, keeps its frames, and says why in its typed ``error``.
     """
-    single = isinstance(inputs, ProgramInput)
-    items: list[ProgramInput] = (
-        [inputs] if isinstance(inputs, ProgramInput) else list(inputs)
-    )
-    prepared = [_prepare(inp) for inp in items]
     contexts = [p.context for p in prepared]
     algs = [_algorithm(p) for p in prepared]
-    ev = evaluator if evaluator is not None else default_evaluator(contexts)
-    timings: dict[str, float] = {"evaluator": 0.0}
+    timings: dict[str, float] = {"subprograms": 0.0}
     t0 = time.perf_counter()
-    try:
-        results = drive(algs, contexts, ev, timings=timings)
-    finally:
-        if evaluator is None and hasattr(ev, "close"):
-            ev.close()  # the sessions it opened
+    results = drive(algs, contexts, evaluator, timings=timings)
     timings["total"] = time.perf_counter() - t0
-    timings["optimizer"] = timings["total"] - timings["evaluator"]
-    outs = [_output(p, res, timings) for p, res in zip(prepared, results, strict=True)]
-    return outs[0] if single else outs
-
-
-def _keywords(options: dict[str, Any]) -> dict[str, Any]:
-    """Keyword arguments as qcdata keywords (setting groups given as models allowed)."""
-    return {
-        k: v.model_dump(exclude_unset=True) if isinstance(v, BaseModel) else v
-        for k, v in options.items()
-    }
-
-
-def _input(
-    calctype: CalcType,
-    structure: Structure,
-    program: ProgramSpec | dict[str, Any],
-    hessian_program: ProgramSpec | dict[str, Any] | bool | None,
-    options: dict[str, Any],
-    given: SinglePointData | None = None,
-) -> ProgramInput:
-    if not (
-        hessian_program is None
-        or isinstance(hessian_program, bool | ProgramSpec | dict)
-    ):
-        raise InputError(
-            "hessian_program= names the program computing Hessians (True: the "
-            f"gradient program; or a ProgramSpec or dict), not {hessian_program!r}"
-        )
-    gspec = (
-        program
-        if isinstance(program, ProgramSpec)
-        else ProgramSpec(**{**program, "calctype": "gradient"})
-    )
-    subs = [gspec.model_copy(update={"calctype": CalcType.gradient})]
-    if hessian_program is True:
-        subs.append(gspec.model_copy(update={"calctype": CalcType.hessian}))
-    elif isinstance(hessian_program, ProgramSpec):
-        subs.append(hessian_program.model_copy(update={"calctype": CalcType.hessian}))
-    elif isinstance(hessian_program, dict):
-        subs.append(ProgramSpec(**{**hessian_program, "calctype": "hessian"}))
-    return ProgramInput(
-        program=PROGRAM,
-        calctype=calctype,
-        structure=structure,
-        keywords=_keywords(options),
-        subprograms=subs,
-        given=given,
-    )
-
-
-def minimize(
-    structure: Structure,
-    program: ProgramSpec | dict[str, Any],
-    *,
-    hessian_program: ProgramSpec | dict[str, Any] | bool | None = None,
-    given: SinglePointData | None = None,
-    evaluator: Any = None,
-    **options: Any,
-) -> ProgramOutput[ProgramInput, OptimizationData]:
-    """Minimize ``structure`` on ``program``'s energy surface.
-
-    Args:
-        structure: The starting structure.
-        program: The program computing energies and gradients, as a
-            ``ProgramSpec`` or a dict (``program``, ``model``, ``keywords``).
-        hessian_program: The program computing Hessians: True for ``program``
-            itself, or another one (such as a cheaper method; frames keep
-            ``program``'s energies and gradients). None: no Hessians (model Hessian,
-            finite differences where an exact one is needed).
-        given: Results already known at ``structure`` (``ProgramInput.given``, such
-            as a frame's ``results``): their Hessian is the initial one, from any
-            program (a cheaper method's will do); their other fields are not used.
-        evaluator: What computes the gradients and Hessians (default: axtb in this
-            process, a program's own sessions, or qccompute; see :func:`run`).
-        **options: The settings (:class:`qcopt.options.OptimizationOptions`), such as
-            ``convergence={"g_tol": 1e-5}`` or ``hessian={"recompute_every": 5}``.
-    """
-    inp = _input(
-        CalcType.optimization, structure, program, hessian_program, options, given
-    )
-    return run(inp, evaluator=evaluator)
-
-
-def find_ts(
-    structure: Structure,
-    program: ProgramSpec | dict[str, Any],
-    *,
-    hessian_program: ProgramSpec | dict[str, Any] | bool | None = None,
-    given: SinglePointData | None = None,
-    evaluator: Any = None,
-    **options: Any,
-) -> ProgramOutput[ProgramInput, OptimizationData]:
-    """Optimize a transition-state guess to a first-order saddle point.
-
-    Arguments as for :func:`minimize`; the settings are
-    :class:`qcopt.options.TransitionStateOptions`. With ``freq={"check": True}``
-    the last frame holds the transition state's Hessian, which :func:`irc` reuses.
-    """
-    inp = _input(
-        CalcType.transition_state, structure, program, hessian_program, options, given
-    )
-    return run(inp, evaluator=evaluator)
-
-
-def irc(
-    start: Structure | ProgramOutput[ProgramInput, OptimizationData],
-    program: ProgramSpec | dict[str, Any],
-    *,
-    hessian_program: ProgramSpec | dict[str, Any] | bool | None = None,
-    given: SinglePointData | None = None,
-    evaluator: Any = None,
-    **options: Any,
-) -> ProgramOutput[ProgramInput, PathData]:
-    """Follow the IRC down both sides of a transition state.
-
-    Args:
-        start: The transition state, or the output of :func:`find_ts`. From an
-            output, the IRC starts at its final structure and reuses its last frame's
-            Hessian (``freq.check``) when this IRC would compute the same one (the
-            same Hessian program, method and settings): only the gradient is then
-            computed at the transition state (``hessian.initial`` is ``given``).
-        program: The program computing energies and gradients (see
-            :func:`minimize`).
-        hessian_program: The program computing Hessians (see :func:`minimize`).
-        given: Results already known at the transition state
-            (``ProgramInput.given``), with a structure as ``start``: their Hessian is
-            the transition state's.
-        evaluator: What computes the gradients and Hessians (see :func:`run`).
-        **options: The settings (:class:`qcopt.options.IRCOptions`).
-    """
-    if isinstance(start, ProgramOutput):
-        if given is not None:
-            raise InputError(
-                "irc() takes given= with a structure; from a search's output it "
-                "reuses the output's last frame"
-            )
-        structure = _searched(start)
-        inp = _input(CalcType.irc, structure, program, hessian_program, options)
-        reused = _reusable(start, inp)
-        if reused is not None:
-            inp = ProgramInput(**{**dict(inp), "given": reused})
-    else:
-        inp = _input(CalcType.irc, start, program, hessian_program, options, given)
-    return run(inp, evaluator=evaluator)
-
-
-def _searched(out: ProgramOutput[Any, Any]) -> Structure:
-    """The transition state a qcopt search found (its final structure)."""
-    inp = out.input_data
-    if not (
-        isinstance(inp, ProgramInput)
-        and inp.program == PROGRAM
-        and inp.calctype == CalcType.transition_state
-    ):
-        raise InputError(
-            "irc() starts from a structure or the output of a qcopt "
-            "transition-state search"
-        )
-    if not out.success:
-        message = out.error.message if out.error is not None else "it failed"
-        raise InputError(
-            f"the transition-state search did not succeed ({message}); to follow the "
-            "IRC from its last structure anyway, pass out.results.final_structure"
-        )
-    return out.results.final_structure
-
-
-def _reusable(
-    out: ProgramOutput[ProgramInput, OptimizationData], inp: ProgramInput
-) -> SinglePointData | None:
-    """A search's transition-state Hessian, when this IRC would compute the same one.
-
-    The same program, method and settings computing Hessians (the Hessian
-    subprogram, else the gradient program by finite differences): the IRC is then
-    the one it would have been, without computing the Hessian again.
-    """
-    last = out.results.frames[-1].results
-    if last.hessian is None:
-        return None
-    search = out.input_data
-    grad, ts_grad = (
-        _subprogram(inp, CalcType.gradient),
-        _subprogram(search, CalcType.gradient),
-    )
-    assert grad is not None and ts_grad is not None  # checked by qcopt's inputs
-    source = _subprogram(inp, CalcType.hessian) or grad
-    ts_source = _subprogram(search, CalcType.hessian) or ts_grad
-    if not _same_spec(ts_source, source):
-        return None
-    return SinglePointData(provenance=last.provenance, hessian=last.hessian)
+    timings["optimizer"] = timings["total"] - timings["subprograms"]
+    return [_output(p, res, timings) for p, res in zip(prepared, results, strict=True)]

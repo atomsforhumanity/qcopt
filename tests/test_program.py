@@ -16,8 +16,11 @@ from qcdata import (
 )
 
 import qcopt
-from qcopt.program import SessionEvaluator, program
+from qcopt.calculation import prepare
+from qcopt.evaluators import SessionEvaluator, evaluator
+from qcopt.program import program
 
+from .helpers import irc, run
 from .surfaces import (
     MB_MINIMA,
     MB_SADDLES,
@@ -71,7 +74,7 @@ def test_qccompute_runs_qcopt_natively_on_a_session_program():
     # qcopt's own slots, straight through (no codec in between)
     assert out.resolved.settings["hessian"]["initial"] == "model"
     assert out.record["converged"] is True
-    assert out.execution.timings["evaluator"] > 0
+    assert out.execution.timings["subprograms"] > 0
     # the frames are the session's: its program and its per-step record
     frames = out.results.frames
     assert all(f.results.provenance.program == "toy" for f in frames)
@@ -108,7 +111,7 @@ class _FailingSession:
 
 def test_a_failing_child_is_a_program_error_with_its_own_error_attached():
     ev = SessionEvaluator(lambda inp, t, c: _FailingSession())
-    out = qcopt.run(_input(), evaluator=ev)
+    out = run(_input(), evaluator=ev)
     assert not out.success
     assert out.error.kind == "program"
     assert out.error.program == "broken"
@@ -120,28 +123,28 @@ def test_a_failing_child_is_a_program_error_with_its_own_error_attached():
 
 
 def test_the_python_api_runs_a_program_with_sessions_through_them():
-    out = qcopt.minimize(_trimer(), TOY)  # no evaluator given
+    out = qcopt.compute(_input())
     assert out.success, out.traceback
     frames = out.results.frames
     assert frames[0].record["warm_start"] is False
     assert all(f.record["warm_start"] for f in frames[1:])
 
 
-def test_by_default_each_task_runs_where_its_program_runs_best():
-    from qcopt.api import _prepare
-    from qcopt.evaluators import ComputeEvaluator, RoutingEvaluator, default_evaluator
+def test_every_task_runs_on_sessions_the_runner_opens():
+    opened = []
+
+    def open_session(inp, threads, calctypes):
+        opened.append(inp.program)
+        return qccompute.session(inp, threads=threads, calctypes=calctypes)
 
     other = ProgramSpec(
         program="no-such-program", calctype="gradient", model={"method": "x"}
     )
-    with_sessions = _prepare(_input()).context
-    without = _prepare(_input(children=[other])).context
-    assert isinstance(default_evaluator([with_sessions]), SessionEvaluator)
-    assert isinstance(default_evaluator([without]), ComputeEvaluator)
-    both = default_evaluator([without, with_sessions])
-    assert isinstance(both, RoutingEvaluator)
-    assert [type(e) for e in both.evaluators] == [SessionEvaluator, ComputeEvaluator]
-    assert both.choice == [1, 0]
+    ctx = program_protocol.RunContext(open_session=open_session)
+    contexts = [prepare(_input()).context, prepare(_input(children=[other])).context]
+    assert isinstance(evaluator(contexts, ctx), SessionEvaluator)
+    out = program.compute(_input(), ctx)
+    assert out.success and set(opened) == {"toy"}
 
 
 def test_several_inputs_advance_together():
@@ -214,6 +217,11 @@ def test_plan_takes_one_spec_for_gradients_and_hessians_as_one_session(monkeypat
     assert info.value.error.cause.code == "not_applicable"
 
 
+@pytest.mark.xfail(
+    raises=ProgramError,
+    strict=True,
+    reason="check_program before qccompute 0.23 expects failures returned, not raised",
+)
 def test_the_program_meets_the_afh_contract():
     from qccompute.testing import check_program
 
@@ -221,18 +229,16 @@ def test_the_program_meets_the_afh_contract():
 
 
 def test_a_direct_call_runs_the_children_in_this_process():
-    ctx = program_protocol.local_context({"toy": toy.ToyProgram()})
-    out = program.compute(_input(), ctx)
-    assert out.success, out.traceback
-    assert out.results.frames[-1].results.provenance.program == "toy"
     # without a runner, qcopt finds its children among the registered and installed
     # programs
+    out = qcopt.compute(_input())
+    assert out.results.frames[-1].results.provenance.program == "toy"
     assert program.compute(_input(), program_protocol.RunContext()).success
     program_protocol.unregister_program("toy")
-    bare = program.compute(_input(), program_protocol.RunContext())
-    assert not bare.success
-    assert bare.error.kind == "program"
-    assert "No program 'toy'" in bare.error.message
+    with pytest.raises(ProgramError) as info:
+        qcopt.compute(_input())
+    error = info.value.error
+    assert (error.kind, error.program) == ("program", "toy")
 
 
 def test_a_failing_hessian_program_is_the_one_named():
@@ -244,9 +250,7 @@ def test_a_failing_hessian_program_is_the_one_named():
         return qccompute.session(inp, threads=t, calctypes=c)
 
     broken = ProgramSpec(program="broken", calctype="hessian", model={"method": "x"})
-    out = qcopt.run(
-        _input(children=[TOY, broken]), evaluator=SessionEvaluator(open_session)
-    )
+    out = run(_input(children=[TOY, broken]), evaluator=SessionEvaluator(open_session))
     assert not out.success
     assert out.error.message == (
         "broken (hessian): SCF did not converge (at the starting geometry)"
@@ -300,7 +304,7 @@ class _MBSession:
 def test_irc_branches_and_their_end_minimizations_keep_their_own_lineage():
     log = []
     ev = SessionEvaluator(lambda inp, t, c: _MBSession(inp.structure, log))
-    out = qcopt.irc(
+    out = irc(
         Structure(symbols=["H"], geometry=[[*MB_SADDLES[0], 0.0]]),
         {"program": "muller-brown"},
         hessian_program=True,
@@ -324,7 +328,7 @@ def test_displaced_gradients_start_from_the_centre_and_are_not_kept():
     # no Hessian program: the transition state's Hessian from finite differences
     log, commits = [], []
     ev = SessionEvaluator(lambda inp, t, c: _MBSession(inp.structure, log, commits))
-    out = qcopt.irc(
+    out = irc(
         Structure(symbols=["H"], geometry=[[*MB_SADDLES[0], 0.0]]),
         {"program": "muller-brown"},
         evaluator=ev,
@@ -337,11 +341,10 @@ def test_displaced_gradients_start_from_the_centre_and_are_not_kept():
 
 
 def test_tasks_run_side_by_side_within_the_granted_threads():
-    from qcopt.api import _prepare
     from qcopt.driver import Request
 
     two = TOY.model_copy(update={"keywords": {"threads": 2}})
-    ctx = _prepare(_input(children=[two])).context
+    ctx = prepare(_input(children=[two])).context
     requests = [Request(t, "gradient", np.zeros((3, 3)), ctx) for t in range(4)]
     tasks = [[k] for k in range(4)]
 
@@ -352,3 +355,32 @@ def test_tasks_run_side_by_side_within_the_granted_threads():
     assert workers(8) == 4  # 2 threads each
     assert workers(4) == 2  # each asks for 2
     assert workers(1) == 1
+
+
+class _GroupSession(_MBSession):
+    """Runs every request, then raises one group when some failed, as sessions do."""
+
+    def compute_many(self, requests):
+        from qccompute.program import failed_frame
+        from qcdata import ErrorInfo, ProgramErrors
+
+        frames = super().compute_many(requests)
+        if len(requests) > 1:  # the displaced gradients: the third fails
+            error = ProgramError(ErrorInfo(kind="convergence", message="no SCF"))
+            frames[2] = failed_frame(frames[2].structure, error, self.program)
+            raise ProgramErrors("1 of the requests failed", [error], frames)
+        return frames
+
+
+def test_a_session_s_group_of_failures_keeps_every_frame():
+    log = []
+    ev = SessionEvaluator(lambda inp, t, c: _GroupSession(inp.structure, log))
+    out = irc(
+        Structure(symbols=["H"], geometry=[[*MB_SADDLES[0], 0.0]]),
+        {"program": "muller-brown"},
+        evaluator=ev,
+    )
+    assert not out.success
+    # the failed displacement's own error, not the group's
+    assert (out.error.program, out.error.cause.kind) == ("muller-brown", "convergence")
+    assert out.error.cause.message == "no SCF"

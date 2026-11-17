@@ -443,7 +443,7 @@ def _evaluate(
             for r in requests
         ]
     if timings is not None:
-        timings["evaluator"] = timings.get("evaluator", 0.0) + (
+        timings["subprograms"] = timings.get("subprograms", 0.0) + (
             time.perf_counter() - t0
         )
     answers = [
@@ -486,7 +486,7 @@ def drive(
         algorithms: Started (not yet primed) generators.
         contexts: The task context of each algorithm.
         evaluator: Computes the requests.
-        timings: If given, ``timings["evaluator"]`` accumulates the seconds spent in
+        timings: If given, ``timings["subprograms"]`` accumulates the seconds spent in
             the evaluator.
 
     Returns:

@@ -2,9 +2,10 @@ import numpy as np
 import pytest
 from qcdata import Structure
 
-import qcopt
 from qcopt.geometry import rigid_basis
 from qcopt.internal import CoordinateError, DelocalizedInternals, build_primitives
+
+from .helpers import find_ts, minimize
 
 ANG = 1.8897261259077824
 RNG = np.random.default_rng(3)
@@ -171,7 +172,7 @@ GFN2 = {"program": "axtb", "model": {"method": "gfn2"}}
 @pytest.mark.parametrize("coordinates", ["tric", "dlc"])
 def test_minimize_a_complex_in_internals(coordinates):
     sym, x = _geometry("water dimer")
-    out = qcopt.minimize(
+    out = minimize(
         Structure(symbols=sym, geometry=x),
         GFN2,
         hessian_program=True,
@@ -192,14 +193,14 @@ def test_saddle_escape():
         np.array([[0, 0, 0], [1.01, 0, 0], [-0.505, 0.875, 0], [-0.505, -0.875, 0]])
         * ANG
     )
-    flat = qcopt.minimize(
+    flat = minimize(
         Structure(symbols=sym, geometry=x),
         GFN2,
         coordinate_system="cartesian",
         freq={"check": True},
     )
     assert flat.record["n_imaginary"] == 1
-    out = qcopt.minimize(
+    out = minimize(
         Structure(symbols=sym, geometry=x),
         GFN2,
         coordinate_system="cartesian",
@@ -237,7 +238,7 @@ def test_tric_ts_search_does_not_climb_overall_rotation():
 
     s = Structure.open(Path(__file__).parent / "data" / "rqm_rxn_0000006257_ts.xyz")
     gxtb = {"program": "axtb", "model": {"method": "gxtb-v2.0.1"}}
-    out = qcopt.find_ts(
+    out = find_ts(
         s,
         gxtb,
         hessian_program=True,
