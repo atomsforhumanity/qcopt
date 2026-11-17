@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.3.0a8] - 2026-11-17
+
 ### Fixed
 
 - **A saddle escape (`escape.attempts`) steps toward lower energy**, against the
@@ -408,7 +410,8 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
   `find_ts` and `irc` names the Hessian program only, and other values are errors
   (a string was ignored).
 
-[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a7...HEAD
+[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a8...HEAD
+[0.3.0a8]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a8
 [0.3.0a7]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a7
 [0.3.0a6]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a6
 [0.3.0a5]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a5

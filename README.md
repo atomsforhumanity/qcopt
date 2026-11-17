@@ -158,8 +158,8 @@ gradients; results are summarized in AFH's findings.
 ## Install
 
 ```sh
-pip install --pre "qcopt==0.3.0a7"         # on the stack's alpha 7 (qcdata 0.24.0a8, qccompute 0.23.0a7)
-pip install --pre "qcopt[axtb]==0.3.0a7"   # with axtb: g-xTB and GFN2-xTB, analytic Hessians
+pip install --pre "qcopt==0.3.0a8"         # on the stack's alpha 7 (qcdata 0.24.0a8, qccompute 0.23.0a7)
+pip install --pre "qcopt[axtb]==0.3.0a8"   # with axtb: g-xTB and GFN2-xTB, analytic Hessians
 ```
 
 This README describes the 0.3 alphas. Without `--pre`, pip installs qcopt 0.2, whose
