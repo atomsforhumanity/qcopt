@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.3.0a6] - 2026-11-17
+
 ### Changed
 
 - **axtb runs through its own sessions** (axtb 0.2). qcopt's in-process route for axtb
@@ -381,7 +383,8 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
   `find_ts` and `irc` names the Hessian program only, and other values are errors
   (a string was ignored).
 
-[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a5...HEAD
+[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a6...HEAD
+[0.3.0a6]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a6
 [0.3.0a5]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a5
 [0.3.0a4]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a4
 [0.3.0a3]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a3
