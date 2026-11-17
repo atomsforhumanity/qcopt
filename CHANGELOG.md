@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.3.0a2] - 2026-11-17
+
 ### Fixed
 
 - Children on GPUs get them: qcopt declares the `gpu` capability, so a runner grants
@@ -301,7 +303,8 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
   `find_ts` and `irc` names the Hessian program only, and other values are errors
   (a string was ignored).
 
-[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a1...HEAD
+[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a2...HEAD
+[0.3.0a2]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a2
 [0.3.0a1]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a1
 [0.2.3]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.3
 [0.2.2]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.2

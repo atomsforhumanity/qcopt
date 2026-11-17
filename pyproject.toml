@@ -1,6 +1,6 @@
 [project]
 name = "qcopt"
-version = "0.3.0a1"
+version = "0.3.0a2"
 description = "Geometry optimization, transition-state searches, and IRCs that return qcdata results."
 readme = "README.md"
 authors = [{ name = "Colton Hicks", email = "github@coltonhicks.com" }]
