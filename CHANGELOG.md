@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+### Added
+
+- `qcopt.__version__`, like the other packages of the stack.
+
 ### Fixed
 
 - Each output of a list reports the threads its own calculation ran with

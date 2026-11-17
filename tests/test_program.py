@@ -492,3 +492,9 @@ def test_a_round_of_a_batch_program_is_one_batch_across_tasks():
         assert [f.results.energy for f in a.results.frames] == [
             f.results.energy for f in b.results.frames
         ]
+
+
+def test_the_package_has_its_version() -> None:
+    from importlib import metadata
+
+    assert qcopt.__version__ == metadata.version("qcopt") == program.version()

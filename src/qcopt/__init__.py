@@ -23,6 +23,10 @@ A failure raises ``qcdata.ProgramError``. The settings are in docs/settings.md a
 (``qccompute.compute`` with a list), which runs them in lockstep.
 """
 
+from importlib import metadata as _metadata
+
 from .program import compute
 
-__all__ = ["compute"]
+__version__ = _metadata.version(__name__)
+
+__all__ = ["__version__", "compute"]
