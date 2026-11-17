@@ -128,16 +128,17 @@ class AxtbEvaluator:
     """axtb in this process: one Calculator per calculation, reused step to step.
 
     Args:
-        workers: Calculations run side by side (threads); default: CPU cores
-            divided by the threads each calculation uses.
+        threads: The CPU threads granted (the runner's ``ctx.threads``); None: the
+            cores this process may use. Calculations run side by side, as many as the
+            granted threads divided by the threads each one uses.
     """
 
-    def __init__(self, workers: int | None = None) -> None:
+    def __init__(self, threads: int | None = None) -> None:
         """Import axtb and set up the calculator cache."""
         import axtb
 
         self._axtb = axtb
-        self.workers = workers
+        self.threads = threads
         self.version = _version("axtb")
         # (task, kind) -> (the calculator's setup, the calculator); a new setup (another
         # run's task with the same index) replaces it
@@ -253,25 +254,21 @@ class AxtbEvaluator:
 
     def __call__(self, requests: Sequence[Request]) -> list[Answer]:
         """Compute the requests; one task's in order, tasks side by side."""
-        workers = self.workers
-        if workers is None:
-            threads = max(
-                [1]
-                + [
-                    int(r.context.gradient_spec.keywords.get("threads", 1))
-                    for r in requests
-                ]
+        each = max(
+            [1]
+            + [
+                int(r.context.gradient_spec.keywords.get("threads", 1))
+                for r in requests
+            ]
+        )
+        granted = self.threads
+        if granted is None:
+            granted = (
+                len(os.sched_getaffinity(0))
+                if hasattr(os, "sched_getaffinity")
+                else os.cpu_count() or 1
             )
-            workers = max(
-                1,
-                (
-                    len(os.sched_getaffinity(0))
-                    if hasattr(os, "sched_getaffinity")
-                    else os.cpu_count() or 1
-                )
-                // threads,
-            )
-        return _map_tasks(requests, self._run, workers)
+        return _map_tasks(requests, self._run, max(1, granted // each))
 
     def forget(self, task: int) -> None:
         """Drop a finished task's calculators."""
@@ -393,7 +390,7 @@ def evaluator(
     if not any(in_process):
         return sessions
     return RoutingEvaluator(
-        [AxtbEvaluator(workers=1), sessions],
+        [AxtbEvaluator(ctx.threads), sessions],
         [0 if a else 1 for a in in_process],
         contexts,
     )
