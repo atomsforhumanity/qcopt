@@ -93,6 +93,29 @@ def test_plan_resolves_settings_and_takes_resources_from_the_children():
     assert info.value.error.kind == "input"
 
 
+class _ScalingProgram:
+    """A program whose plan takes the whole grant (``threads=None``), as DFT does."""
+
+    def plan(self, inp):
+        from qcdata import Resolved
+
+        return program_protocol.Plan(
+            resolved=Resolved(settings={}),
+            resources=program_protocol.Resources(threads=None),
+        )
+
+
+def test_a_child_that_takes_the_whole_grant_gives_qcopt_the_whole_grant(monkeypatch):
+    scaling = _ScalingProgram()
+    monkeypatch.setattr(
+        "qcopt.program.find_program",
+        lambda name: scaling if name == "dft" else program_protocol.find_program(name),
+    )
+    dft = ProgramSpec(program="dft", calctype="hessian", model={"method": "b3lyp"})
+    assert program.plan(_input(children=[TOY])).resources.threads == 1
+    assert program.plan(_input(children=[TOY, dft])).resources.threads is None
+
+
 class _FailingSession:
     program, program_version = "broken", "1"
 
@@ -376,6 +399,21 @@ def test_numerics_name_the_calculation_type_and_qcref_s_data():
         "irc:"
     )
     assert ts.split("+qcref:")[1] == program.numerics(_input()).split("+qcref:")[1]
+
+
+def test_numerics_name_axtb_where_qcopt_runs_it_and_no_runner_sees_it(monkeypatch):
+    pytest.importorskip("axtb")
+    from importlib import metadata
+
+    axtb = ProgramSpec(program="axtb", calctype="gradient", model={"method": "gfn2"})
+    with_axtb = program.numerics(_input(children=[axtb]))
+    assert with_axtb == program.numerics(_input()) + "+axtb:" + metadata.version("axtb")
+    # once axtb is a program, the runner records it
+    monkeypatch.setattr(
+        "qcopt.evaluators.find_program",
+        lambda name: object() if name == "axtb" else None,
+    )
+    assert program.numerics(_input(children=[axtb])) == program.numerics(_input())
 
 
 class _BatchedSurface(FunctionProgram):

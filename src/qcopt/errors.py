@@ -4,6 +4,7 @@ The kinds are those shared by AFH's programs (axtb, linus), one vocabulary acros
 Python exceptions (``.kind``) and qcdata results (``error.kind``):
 
 - ``input``: settings or a structure qcopt cannot run as given;
+- ``unsupported``: a shared setting qcopt cannot honour yet (``accuracy`` targets);
 - ``program``: a gradient or Hessian calculation failed (its error is attached);
 - ``convergence``: the run did not reach what was asked: not converged in
   ``max_iter``, or converged to the wrong kind of stationary point (``reason`` says
@@ -17,7 +18,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-ErrorKind = Literal["input", "program", "convergence", "numerical", "internal"]
+ErrorKind = Literal[
+    "input", "unsupported", "program", "convergence", "numerical", "internal"
+]
 
 
 class QcoptError(Exception):
@@ -42,3 +45,13 @@ class InputError(QcoptError, ValueError):
         """Hold the message and its code."""
         super().__init__(message)
         self.code = code
+
+
+class UnsupportedError(InputError):
+    """A shared setting qcopt cannot honour yet (``kind="unsupported"``).
+
+    An :class:`InputError`, so every check of an input catches it; its ``kind`` is what
+    results report.
+    """
+
+    kind: ErrorKind = "unsupported"

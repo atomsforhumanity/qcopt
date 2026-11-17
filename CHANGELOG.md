@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+### Changed
+
+- Requires the stack's alpha 3: qcdata 0.24.0a4 and qccompute 0.23.0a3.
+- The shared keyword `accuracy` (qcdata's `Accuracy`: energy, gradient and Hessian
+  targets) is read as every AFH program reads it: a malformed one fails with kind
+  `input`, and a target with kind `unsupported`, since qcopt cannot honour targets
+  yet (its `convergence` settings set how tightly it converges; the gradient
+  program's own keywords how accurate the gradients are). It was an unknown setting.
+
+### Fixed
+
+- A child whose plan takes the whole grant (`threads=None`) gives qcopt's plan the
+  whole grant; it made qcopt's plan fail.
+- `numerics` names axtb's version (`"+axtb:0.1.1"`) when qcopt runs its axtb
+  children in this process, where no runner sees them, so a store never reuses a
+  result made with another axtb.
+
 ## [0.3.0a2] - 2026-11-17
 
 ### Fixed

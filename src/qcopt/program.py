@@ -42,7 +42,7 @@ from qcref import periodic_table as pt
 
 from .calculation import CALCTYPES, PROGRAM, Prepared, _version, prepare, run
 from .errors import InputError
-from .evaluators import evaluator, same_spec
+from .evaluators import evaluator, same_spec, unseen_axtb
 from .options import options_schema
 
 
@@ -141,10 +141,13 @@ class QcoptProgram:
         The calculation type's epoch (:data:`NUMERICS_EPOCHS`) and a digest of the
         qcref data qcopt reads, such as ``"transition_state:1+qcref:1a2b3c4d5e6f"``. It
         changes whenever results for an unchanged input may change. The subprograms'
-        numbers are their own programs' numerics.
+        numbers are their own programs' numerics, except axtb's where qcopt runs it in
+        this process and no runner sees it (``"+axtb:0.1.1"``, :func:`unseen_axtb`).
         """
         calctype = CalcType(spec.calctype).value
-        return f"{calctype}:{NUMERICS_EPOCHS[calctype]}+qcref:{_qcref_digest()}"
+        own = f"{calctype}:{NUMERICS_EPOCHS[calctype]}+qcref:{_qcref_digest()}"
+        axtb = unseen_axtb(spec)
+        return own if axtb is None else f"{own}+axtb:{axtb}"
 
     def settings_schema(self, calctype: CalcType) -> dict[str, Any]:
         """The JSON Schema of the settings (``keywords``) of ``calctype``."""
@@ -164,7 +167,7 @@ class QcoptProgram:
         try:
             p = prepare(inp)
         except InputError as exc:
-            raise ProgramError.of("input", str(exc), code=exc.code) from None
+            raise ProgramError.of(exc.kind, str(exc), code=exc.code) from None
         return Plan(
             resolved=Resolved(settings=p.resolved, reasons=p.reasons),
             resources=_plan_children(inp),
@@ -226,7 +229,7 @@ def _input_failure(
     inp: ProgramInput, exc: InputError
 ) -> ProgramOutput[ProgramInput, Data]:
     """The output of an input qcopt cannot run (nothing was computed)."""
-    error = ErrorInfo(kind="input", message=str(exc), code=exc.code)
+    error = ErrorInfo(kind=exc.kind, message=str(exc), code=exc.code)
     return ProgramOutput.failure(inp, error)
 
 
@@ -236,7 +239,7 @@ def _plan_children(inp: ProgramInput) -> Resources:
     A child's settings are checked here, before anything is computed (an unknown key, a
     setting that cannot take effect). Children run through qccompute's codecs are
     checked when they run. qcopt's own work is light: the resources are the largest
-    child's.
+    child's (threads ``None``, the whole grant, if any child's are).
 
     When the Hessians come from the gradient program's own calculation, one session
     serves both, and a setting is valid if it applies to either (a session's rule): only
@@ -246,7 +249,8 @@ def _plan_children(inp: ProgramInput) -> Resources:
         ProgramError: Kind ``program``, with the child's error as the cause.
     """
     structure = inp.require_structure()
-    threads, memory, gpus = 1, None, 0
+    threads: int | None = 1
+    memory, gpus = None, 0
     hessians = [c for c in inp.subprograms if c.calctype == CalcType.hessian]
     for child in inp.subprograms:
         if child.calctype == CalcType.gradient and any(
@@ -255,7 +259,7 @@ def _plan_children(inp: ProgramInput) -> Resources:
             continue
         program = find_program(child.program)
         if program is None:
-            threads = max(threads, int(child.keywords.get("threads", 1)))
+            threads = _most(threads, int(child.keywords.get("threads", 1)))
             continue
         try:
             res = plan_of(program, ProgramInput.from_spec(child, structure)).resources
@@ -268,11 +272,16 @@ def _plan_children(inp: ProgramInput) -> Resources:
                     cause=exc.error,
                 )
             ) from None
-        threads = max(threads, res.threads)
+        threads = _most(threads, res.threads)
         gpus = max(gpus, res.gpus)
         if res.memory_gib is not None:
             memory = max(memory or 0.0, res.memory_gib)
     return Resources(threads=threads, memory_gib=memory, gpus=gpus)
+
+
+def _most(a: int | None, b: int | None) -> int | None:
+    """The larger of two thread counts, where None (the whole grant) is the largest."""
+    return None if a is None or b is None else max(a, b)
 
 
 #: The object registered under the ``qccompute.programs`` entry point ``qcopt``.

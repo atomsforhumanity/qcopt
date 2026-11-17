@@ -142,7 +142,7 @@ def run(inputs: ProgramInput | Sequence[ProgramInput], evaluator: Any = None) ->
     Without an evaluator, through qcopt's program (``compute``, or ``compute_batch``
     for a list). With one, through the seam: the inputs are checked as ``compute``
     checks them, then run in lockstep on the evaluator. Either way an input qcopt
-    cannot run raises ``ProgramError`` of kind ``input``.
+    cannot run raises ``ProgramError`` of kind ``input`` (or ``unsupported``).
     """
     single = isinstance(inputs, ProgramInput)
     items = [inputs] if isinstance(inputs, ProgramInput) else list(inputs)
@@ -151,14 +151,14 @@ def run(inputs: ProgramInput | Sequence[ProgramInput], evaluator: Any = None) ->
             try:
                 return qcopt.compute(items[0])
             except ProgramError as exc:
-                if exc.error.kind == "input":
+                if exc.error.kind in ("input", "unsupported"):
                     raise
                 return exc.output
         return qcopt_program.compute_batch(items)
     try:
         prepared = [prepare(inp) for inp in items]
     except InputError as exc:
-        raise ProgramError.of("input", str(exc), code=exc.code) from None
+        raise ProgramError.of(exc.kind, str(exc), code=exc.code) from None
     outs = run_prepared(prepared, evaluator)
     return outs[0] if single else outs
 

@@ -36,12 +36,14 @@ from typing import Any
 
 import numpy as np
 from qcdata import (
+    Accuracy,
     CalcType,
     ErrorInfo,
     ExecutionInfo,
     Frame,
     OptimizationData,
     PathData,
+    ProgramError,
     ProgramInput,
     ProgramOutput,
     ProgramSpec,
@@ -57,7 +59,7 @@ from . import algorithms
 from .algorithms.common import RunResult, resolve_initial_hessian
 from .constraints import ConstraintSet
 from .driver import Answer, Evaluator, TaskContext, drive
-from .errors import InputError
+from .errors import InputError, UnsupportedError
 from .evaluators import surface_keywords
 from .geometry import Array
 from .options import (
@@ -218,12 +220,42 @@ def _resolve(
     return settings, reasons
 
 
+def _without_accuracy(keywords: Any) -> dict[str, Any]:
+    """The keywords without the shared ``accuracy``, once checked: qcopt's settings.
+
+    ``accuracy`` (qcdata's ``Accuracy``: energy, gradient and Hessian targets) is a
+    keyword every AFH program reads the same way. qcopt cannot honour targets yet: how
+    tightly it converges is its ``convergence`` settings, and how accurate the
+    gradients are is the gradient program's own settings. A target is refused as
+    ``unsupported``; a malformed one as any program refuses it.
+
+    Raises:
+        InputError: A malformed ``accuracy`` (its code: ``unknown_key``,
+            ``no_effect``, or none).
+        UnsupportedError: An ``accuracy`` that sets a target.
+    """
+    settings = dict(keywords)
+    try:
+        target = Accuracy.from_keywords(settings)
+    except ProgramError as exc:
+        raise InputError(exc.error.message, exc.error.code) from None
+    settings.pop("accuracy", None)
+    if target is not None:
+        raise UnsupportedError(
+            "qcopt does not take accuracy targets yet: its convergence settings "
+            "(convergence) set how tightly it converges, and the gradient program's "
+            "own keywords how accurate the gradients are"
+        )
+    return settings
+
+
 def prepare(inp: ProgramInput) -> Prepared:
     """Check one input before anything is computed.
 
     Raises:
         InputError: Not a qcopt input, a calculation type qcopt does not run, a
             missing or extra subprogram, or invalid settings.
+        UnsupportedError: An ``accuracy`` target (:func:`_without_accuracy`).
     """
     if inp.program != PROGRAM:
         raise InputError(f"qcopt runs program='qcopt' inputs, not {inp.program!r}")
@@ -238,7 +270,7 @@ def prepare(inp: ProgramInput) -> Prepared:
         raise InputError(
             f"qcopt subprograms are 'gradient' and 'hessian', not {sorted(extra)}"
         )
-    options = parse_options(inp.calctype.value, dict(inp.keywords))
+    options = parse_options(inp.calctype.value, _without_accuracy(inp.keywords))
     if hess is not None and options.hessian.initial == "finite_difference":
         raise InputError(
             "hessian.initial='finite_difference' takes the Hessian from gradients; "

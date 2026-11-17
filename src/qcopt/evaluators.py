@@ -369,6 +369,27 @@ def axtb_in_process(context: TaskContext) -> bool:
     return True
 
 
+def unseen_axtb(spec: Any) -> str | None:
+    """The axtb version qcopt computes a spec's children with where no runner sees it.
+
+    A runner records the identity of every subprogram it finds as a program. axtb 0.1 is
+    none, so when qcopt runs its axtb children in this process their identity is
+    qcopt's to give (a store must not reuse a result made by another axtb).
+
+    Returns:
+        axtb's version, if a child is axtb, axtb is importable and no program is
+        registered under its name; else None.
+    """
+    if not any(c.program == "axtb" for c in getattr(spec, "subprograms", ())):
+        return None
+    if find_program("axtb") is not None:
+        return None
+    try:
+        return metadata.version("axtb")
+    except metadata.PackageNotFoundError:
+        return None
+
+
 def route(context: TaskContext) -> str:
     """How a task's gradients are computed: ``axtb``, ``compute`` or ``sessions``.
 

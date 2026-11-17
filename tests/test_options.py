@@ -8,6 +8,7 @@ from qcdata import ProgramError, ProgramInput, Structure
 import qcopt
 from qcopt.errors import InputError
 from qcopt.options import default_options, options_schema, parse_options
+from qcopt.program import program as qcopt_program
 
 from .helpers import (
     FunctionEvaluator,
@@ -136,6 +137,31 @@ def test_input_errors_raise_with_kind_input_and_the_failed_output():
     assert (info.value.error.kind, info.value.error.code) == ("input", "unknown_key")
     out = info.value.output
     assert not out.success and out.results.frames == []
+
+
+@pytest.mark.parametrize(
+    "accuracy, kind, code",
+    [
+        ({"gradient": 1e-5}, "unsupported", None),  # a target qcopt cannot honour yet
+        (0.01, "input", None),  # a bare number, as every program refuses it
+        ({"grad": 1e-5}, "input", "unknown_key"),
+    ],
+)
+def test_the_shared_accuracy_keyword_is_read_as_every_program_reads_it(
+    accuracy, kind, code
+):
+    inp = qcopt_input("optimization", _atom(0.3, 0.2), MB, accuracy=accuracy)
+    with registered(FunctionProgram("muller-brown", muller_brown)):
+        with pytest.raises(ProgramError, match="accuracy") as info:
+            qcopt.compute(inp)
+        (failed,) = qcopt_program.compute_batch([inp])
+    assert (info.value.error.kind, info.value.error.code) == (kind, code)
+    assert (failed.error.kind, failed.error.code) == (kind, code)
+
+
+def test_no_accuracy_target_is_no_accuracy():
+    out = minimize(_atom(0.3, 0.2), MB, evaluator=_ev(False), accuracy=None)
+    assert out.success, out.traceback
 
 
 def test_auto_is_resolved_with_reasons():
