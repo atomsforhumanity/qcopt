@@ -1,4 +1,4 @@
-"""Test helpers: qcopt inputs in a line, Python functions as programs, the driver seam.
+"""Test helpers: qcopt inputs in a line, registered programs, the driver seam.
 
 qcopt's interface is ``qcopt.compute(inp)``. Tests of what an algorithm does (steps,
 rejections, Hessian schedules, failures of a child) often need a hand-made evaluator
@@ -15,22 +15,11 @@ from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
-from qccompute.program import (
-    Capabilities,
-    Plan,
-    Resources,
-    register_program,
-    unregister_program,
-)
+from qccompute.program import register_program, unregister_program
 from qcdata import (
-    CalcType,
-    ErrorInfo,
     ProgramError,
     ProgramInput,
-    ProgramOutput,
     ProgramSpec,
-    Provenance,
-    Resolved,
     SinglePointData,
     Structure,
 )
@@ -41,83 +30,6 @@ from qcopt.calculation import run as run_prepared
 from qcopt.driver import Answer, Request, TaskContext
 from qcopt.errors import InputError
 from qcopt.program import program as qcopt_program
-
-
-class FunctionProgram:
-    """A Python function as an AFH program: energies, gradients, optionally Hessians.
-
-    Args:
-        name: The program's name.
-        function: ``function(positions) -> (energy, gradient)``; positions ``(n, 3)``
-            in bohr, energy in Hartree, gradient ``(n, 3)`` in Hartree/bohr.
-        hessian: ``hessian(positions) -> (3n, 3n)`` array (Hartree/bohr²), or None:
-            the program computes no Hessians.
-    """
-
-    def __init__(
-        self,
-        name: str,
-        function: Callable[[Any], tuple[float, Any]],
-        hessian: Callable[[Any], Any] | None = None,
-    ) -> None:
-        """Wrap the functions."""
-        self.name = name
-        self.function = function
-        self.hessian = hessian
-
-    def version(self) -> str:
-        """A fixed version."""
-        return "test"
-
-    def capabilities(self) -> Capabilities:
-        """Gradients, and Hessians when a Hessian function was given."""
-        calctypes = {CalcType.gradient}
-        if self.hessian is not None:
-            calctypes.add(CalcType.hessian)
-        return Capabilities(
-            calctypes=frozenset(calctypes), in_process=True, thread_safe=True
-        )
-
-    def settings_schema(self, calctype: CalcType) -> dict[str, Any]:
-        """No settings."""
-        return {"type": "object", "properties": {}, "additionalProperties": False}
-
-    def record_schema(self, calctype: CalcType) -> dict[str, Any]:
-        """No record."""
-        return {"type": "object"}
-
-    def plan(self, inp: ProgramInput) -> Plan:
-        """Nothing to resolve; any keyword is unknown."""
-        if inp.keywords:
-            raise ProgramError.of(
-                "input",
-                f"{self.name} has no settings: {sorted(inp.keywords)}",
-                code="unknown_key",
-            )
-        return Plan(resolved=Resolved(settings={}), resources=Resources())
-
-    def compute(
-        self, inp: ProgramInput, ctx: Any = None
-    ) -> ProgramOutput[ProgramInput, SinglePointData]:
-        """Evaluate the functions at the input's structure."""
-        x = np.asarray(inp.require_structure().geometry, dtype=float)
-        try:
-            e, g = self.function(x)
-            h = None
-            if inp.calctype == CalcType.hessian:
-                if self.hessian is None:
-                    raise ValueError(f"{self.name} computes no Hessians")
-                h = np.asarray(self.hessian(x), dtype=float)
-        except Exception as exc:  # noqa: BLE001 - the failed output says why
-            error = ErrorInfo(kind="internal", message=f"{type(exc).__name__}: {exc}")
-            return ProgramOutput.failure(inp, error, traceback=traceback.format_exc())
-        results = SinglePointData(
-            provenance=Provenance(program=self.name, program_version="test"),
-            energy=float(e),
-            gradient=np.asarray(g, dtype=float).reshape(-1, 3),
-            hessian=h,
-        )
-        return ProgramOutput(input_data=inp, success=True, results=results)
 
 
 @contextmanager
@@ -140,7 +52,7 @@ class FunctionEvaluator:
 
     Args:
         function: ``function(positions) -> (energy, gradient)``, as for
-            :class:`FunctionProgram`.
+            ``qccompute.program.FunctionProgram``.
         hessian: ``hessian(positions) -> (3n, 3n)``, or None for finite differences
             of the gradient.
         name: Program name recorded as the frames' provenance.

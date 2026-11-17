@@ -1135,31 +1135,15 @@ wheels = [
 ]
 
 [[package]]
-name = "qccodec"
-version = "0.21.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "packaging" },
-    { name = "qcdata" },
-    { name = "qcref" },
-    { name = "tomli-w" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b1/79/3979596f22aad093fb44f2a5d92015755ae00258c52ca42f0c67c6b3e9a8/qccodec-0.21.0.tar.gz", hash = "sha256:8b9d2c093727c278d8705f923f58e1cc872b362dc16433a9c4577ee9f1e0eae1", size = 1050977, upload-time = "2026-10-23T23:38:31.111Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/35/07/fdd33a933adb67d3901d27815cd014a33189818f5cdd68823cdeab197a8d/qccodec-0.21.0-py3-none-any.whl", hash = "sha256:5855355b227d7c23a6707f9548c2a5f492a05b9d1ba44087a04829ce7365af50", size = 107285, upload-time = "2026-10-23T23:38:29.287Z" },
-]
-
-[[package]]
 name = "qccompute"
-version = "0.22.0"
+version = "0.23.0a1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "qccodec" },
     { name = "qcdata" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a4/78/4edebb541bae5a11d4591ef2394b79291b04c3fbaa8f74a5f7252e1f12ba/qccompute-0.22.0.tar.gz", hash = "sha256:7aa5f9424568616156ee6b5a5a0c1d58ca3eebfbca2d88d0caed9bcd441d1084", size = 571941, upload-time = "2026-10-23T23:42:40.371Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d2/fa/b3086fce29ea112049172c9f97d3e8d419c0c319b85d40cb34b85351f028/qccompute-0.23.0a1.tar.gz", hash = "sha256:82db1ef1775439f21626d5598e871ee458bb8898fbc8abec83ef87f68895be75", size = 589391, upload-time = "2026-11-17T01:54:36.573Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1b/29/4b7a41fcc2c0f4cb067b712908727bff0e2ef4ea06a2c05b19d4612771c7/qccompute-0.22.0-py3-none-any.whl", hash = "sha256:9e72b6ce367c6f32c78116d7dac4fdf8f3c721458aca00a62054d58d85959c31", size = 36765, upload-time = "2026-10-23T23:42:38.642Z" },
+    { url = "https://files.pythonhosted.org/packages/98/b4/a57050d1d49f0f0b91434634a925ed8c556d03cdf492d92d1923e644d9e7/qccompute-0.23.0a1-py3-none-any.whl", hash = "sha256:170fcd0acaf2543546ab427ea6c127580f241ff976114e8609c19f443734514e", size = 55061, upload-time = "2026-11-17T01:54:35.314Z" },
 ]
 
 [[package]]
@@ -1183,7 +1167,7 @@ wheels = [
 
 [[package]]
 name = "qcopt"
-version = "0.2.2"
+version = "0.3.0a1"
 source = { editable = "." }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1216,7 +1200,7 @@ requires-dist = [
     { name = "axtb", marker = "extra == 'axtb'", specifier = ">=0.1.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "qccompute", specifier = ">=0.22.0" },
+    { name = "qccompute", specifier = ">=0.23.0a1" },
     { name = "qcdata", specifier = ">=0.24.0a2" },
     { name = "qcref", specifier = ">=0.5.1" },
 ]
@@ -1299,15 +1283,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/be/ba/1f744cdc819428fc6b5084ec34d9b30660f6f9daaf70eead706e3203ec3c/toml-0.10.2.tar.gz", hash = "sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f", size = 22253, upload-time = "2020-11-01T01:40:22.204Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/44/6f/7120676b6d73228c96e17f1f794d8ab046fc910d781c8d151120c3f1569e/toml-0.10.2-py2.py3-none-any.whl", hash = "sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b", size = 16588, upload-time = "2020-11-01T01:40:20.672Z" },
-]
-
-[[package]]
-name = "tomli-w"
-version = "1.2.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/19/75/241269d1da26b624c0d5e110e8149093c759b7a286138f4efd61a60e75fe/tomli_w-1.2.0.tar.gz", hash = "sha256:2dd14fac5a47c27be9cd4c976af5a12d87fb1f0b4512f81d69cce3b35ae25021", size = 7184, upload-time = "2025-01-15T12:07:24.262Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c7/18/c86eb8e0202e32dd3df50d43d7ff9854f8e0603945ff398974c1d91ac1ef/tomli_w-1.2.0-py3-none-any.whl", hash = "sha256:188306098d013b691fcadc011abd66727d3c414c571bb01b1a174ba8c983cf90", size = 6675, upload-time = "2025-01-15T12:07:22.074Z" },
 ]
 
 [[package]]

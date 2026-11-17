@@ -66,8 +66,9 @@ Many calculations at once go through qccompute, the runner of AFH programs:
 gradients from all of them are computed together. qcopt computes its gradients and
 Hessians through sessions of the child programs, one per calculation and program,
 warm-started from geometry to geometry (each IRC branch its own lineage), under the
-runner's resources; called directly, it opens them as `qccompute.session` does. Until
-axtb has sessions of its own, qcopt runs axtb in this process.
+runner's resources. Called directly, `qcopt.compute` hands itself to qccompute's default
+runner, which runs it on this machine. Until axtb has sessions of its own, qcopt runs
+axtb in this process.
 
 ## Settings
 
@@ -150,6 +151,7 @@ gradients; results are summarized in AFH's findings.
 ## Install
 
 ```sh
+pip install --pre qcopt         # 0.3 alphas, on the qcdata 0.24 and qccompute 0.23 alphas
 pip install qcopt               # any program qccompute runs
 pip install "qcopt[axtb]"       # with axtb: in-process g-xTB and GFN2-xTB, analytic Hessians
 ```

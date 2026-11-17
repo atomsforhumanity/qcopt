@@ -384,13 +384,19 @@ def _cause(answer: Answer | None) -> tuple[str | None, ErrorInfo | None]:
 
 
 def _output(
-    p: Prepared, result: RunResult | BaseException, timings: dict[str, float]
+    p: Prepared,
+    result: RunResult | BaseException,
+    timings: dict[str, float],
+    threads: int | None = None,
 ) -> ProgramOutput[ProgramInput, Any]:
     inp = p.inp
     s = inp.require_structure()
     prov = Provenance(program=PROGRAM, program_version=_version())
     execution = ExecutionInfo(
-        wall_time=timings["total"], hostname=socket.gethostname(), timings=timings
+        wall_time=timings["total"],
+        hostname=socket.gethostname(),
+        timings=timings,
+        threads=threads,
     )
     irc = isinstance(p.options, IRCOptions)
     common: dict[str, Any] = {
@@ -466,7 +472,7 @@ def _output(
 
 
 def run(
-    prepared: Sequence[Prepared], evaluator: Evaluator
+    prepared: Sequence[Prepared], evaluator: Evaluator, threads: int | None = None
 ) -> list[ProgramOutput[ProgramInput, Any]]:
     """Run checked calculations in lockstep on one evaluator.
 
@@ -476,6 +482,8 @@ def run(
     Args:
         prepared: The calculations, checked by :func:`prepare`.
         evaluator: What computes their gradients and Hessians.
+        threads: The threads granted, shared by their subprograms; recorded in each
+            output's ``execution.threads``.
 
     Returns:
         One output per calculation, in order. One that fails or does not converge has
@@ -488,4 +496,7 @@ def run(
     results = drive(algs, contexts, evaluator, timings=timings)
     timings["total"] = time.perf_counter() - t0
     timings["optimizer"] = timings["total"] - timings["subprograms"]
-    return [_output(p, res, timings) for p, res in zip(prepared, results, strict=True)]
+    return [
+        _output(p, res, timings, threads)
+        for p, res in zip(prepared, results, strict=True)
+    ]

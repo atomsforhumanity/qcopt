@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.3.0a1] - 2026-11-17
+
+The first alpha of qcopt 0.3, on the alphas of AFH's redesigned qc* stack (qcdata
+0.24.0a2, qccompute 0.23.0a1). Breaking changes come without compatibility shims.
+
 qcopt 0.3 reorganizes the settings and the results; the algorithms compute exactly what
 0.2.2 computed (checked bit for bit on 77 golden trajectories: model surfaces, minima,
 transition states and IRCs at GFN2-xTB and g-xTB, constraints, frozen atoms, Hessian
@@ -33,9 +38,10 @@ programs, guide modes, batched runs).
   `record` and `resolved` settings. An input qcopt cannot run raises it with kind
   `input` (was `qcopt.InputError`). `compute_batch` returns failures in place.
 - **qcopt has no route of its own to programs.** Every gradient and Hessian comes from
-  a child session the runner opens; called directly, qcopt opens them as
-  `qccompute.session` does, so any program qccompute runs is a child. Until axtb has
-  sessions of its own, qcopt still runs axtb in this process.
+  a child session the runner opens (`ctx.session`); called directly, `qcopt.compute`
+  hands itself to qccompute's default runner, so any program qccompute runs is a child.
+  Until axtb has sessions of its own, qcopt still runs axtb in this process.
+- Requires the alphas qcdata 0.24.0a2 and qccompute 0.23.0a1.
 - **Settings come in groups**, one options model per calculation type
   (`OptimizationOptions`, `TransitionStateOptions`, `IRCOptions`), with the rules shared
   with axtb and linus. The 0.2 keywords and where they went:
@@ -273,7 +279,8 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
   `find_ts` and `irc` names the Hessian program only, and other values are errors
   (a string was ignored).
 
-[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.2.2...HEAD
+[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a1...HEAD
+[0.3.0a1]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a1
 [0.2.2]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.2
 [0.2.1]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.1
 [0.2.0]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.2.0

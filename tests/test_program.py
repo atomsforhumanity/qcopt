@@ -131,44 +131,28 @@ def test_the_python_api_runs_a_program_with_sessions_through_them():
 
 
 def test_every_task_runs_on_sessions_the_runner_opens():
-    opened = []
-
-    def open_session(inp, threads, calctypes):
-        opened.append(inp.program)
-        return qccompute.session(inp, threads=threads, calctypes=calctypes)
-
     other = ProgramSpec(
         program="no-such-program", calctype="gradient", model={"method": "x"}
     )
-    ctx = program_protocol.RunContext(open_session=open_session)
+    ctx = program_protocol.RunContext()
     contexts = [prepare(_input()).context, prepare(_input(children=[other])).context]
     assert isinstance(evaluator(contexts, ctx), SessionEvaluator)
     out = program.compute(_input(), ctx)
-    assert out.success and set(opened) == {"toy"}
+    assert out.results.frames[-1].results.provenance.program == "toy"
 
 
 def test_several_inputs_advance_together():
     inputs = [_input(structure=_trimer(s)) for s in (1.05, 1.1, 1.2)]
-    outs = program.compute_batch(
-        inputs,
-        program_protocol.RunContext(
-            open_session=lambda inp, t, c: qccompute.session(
-                inp, threads=t, calctypes=c
-            )
-        ),
-    )
+    outs = program.compute_batch(inputs, program_protocol.RunContext())
     assert all(o.success for o in outs)
+    # through the runner: a list of qcopt inputs is one batch
+    assert all(o.success for o in qccompute.compute(inputs))
 
 
 def test_a_child_that_refuses_its_settings_fails_only_its_own_calculation():
     bad = TOY.model_copy(update={"keywords": {"nonsense": 1}})
     outs = program.compute_batch(
-        [_input(children=[bad]), _input()],
-        program_protocol.RunContext(
-            open_session=lambda inp, t, c: qccompute.session(
-                inp, threads=t, calctypes=c
-            )
-        ),
+        [_input(children=[bad]), _input()], program_protocol.RunContext()
     )
     assert not outs[0].success
     assert (outs[0].error.kind, outs[0].error.program) == ("program", "toy")
@@ -217,15 +201,10 @@ def test_plan_takes_one_spec_for_gradients_and_hessians_as_one_session(monkeypat
     assert info.value.error.cause.code == "not_applicable"
 
 
-@pytest.mark.xfail(
-    raises=ProgramError,
-    strict=True,
-    reason="check_program before qccompute 0.23 expects failures returned, not raised",
-)
 def test_the_program_meets_the_afh_contract():
     from qccompute.testing import check_program
 
-    check_program(program, [_input()], children={"toy": toy.ToyProgram()})
+    check_program(program, [_input()])
 
 
 def test_a_direct_call_runs_the_children_in_this_process():
@@ -247,7 +226,7 @@ def test_a_failing_hessian_program_is_the_one_named():
     def open_session(inp, t, c):
         if inp.program == "broken":
             return _FailingSession()
-        return qccompute.session(inp, threads=t, calctypes=c)
+        return program_protocol.RunContext().session(inp, threads=t, calctypes=c)
 
     broken = ProgramSpec(program="broken", calctype="hessian", model={"method": "x"})
     out = run(_input(children=[TOY, broken]), evaluator=SessionEvaluator(open_session))

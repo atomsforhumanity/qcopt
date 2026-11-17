@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from qccompute.program import FunctionProgram
 from qcdata import ProgramError, ProgramInput, Structure
 
 import qcopt
@@ -10,7 +11,6 @@ from qcopt.options import default_options, options_schema, parse_options
 
 from .helpers import (
     FunctionEvaluator,
-    FunctionProgram,
     find_ts,
     irc,
     minimize,

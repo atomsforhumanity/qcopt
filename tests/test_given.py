@@ -2,11 +2,12 @@
 
 import numpy as np
 import pytest
+from qccompute.program import FunctionProgram
 from qcdata import ProgramError, SinglePointData, Structure
 
 import qcopt
 
-from .helpers import FunctionProgram, qcopt_input, registered
+from .helpers import qcopt_input, registered
 from .surfaces import MB_MINIMA, muller_brown, muller_brown_hessian
 
 SPEC = {"program": "muller-brown"}

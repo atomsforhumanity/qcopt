@@ -6,13 +6,10 @@ import qccompute
 from qcdata import (
     OptimizationData,
     PathData,
-    ProgramError,
     ProgramInput,
     ProgramSpec,
     Structure,
 )
-
-import qcopt
 
 pytest.importorskip("axtb")
 
@@ -56,19 +53,3 @@ def test_bad_keywords_fail_in_qccompute():
     out = qccompute.compute(_input("optimization", nonsense=1), raise_exc=False)
     assert not out.success
     assert "nonsense" in out.traceback
-
-
-@pytest.mark.xfail(
-    raises=ProgramError,
-    strict=True,
-    reason="axtb 0.1.0's codec builds a pre-0.24 qcdata Wavefunction",
-)
-def test_children_without_sessions_run_through_qccompute(monkeypatch):
-    # axtb as qccompute runs it (its codec, one calculation per gradient), not on
-    # qcopt's in-process axtb evaluator: the path of every program without sessions.
-    # Gradients only: axtb 0.1.0's codec Hessians do not validate under qcdata 0.24
-    # (they carry the removed freqs_wavenumber fields).
-    monkeypatch.setattr("qcopt.evaluators.axtb_in_process", lambda context: False)
-    out = qcopt.compute(_input("optimization", hessians=False))
-    assert out.success
-    assert out.results.frames[-1].results.provenance.program == "axtb"

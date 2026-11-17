@@ -2,7 +2,8 @@ name: Release
 
 # The file name must stay publish-to-pypi.yaml: PyPI's trusted publisher for this
 # project is registered against it.
-# Pushing a version tag (e.g. 0.16.0) on main publishes to PyPI and creates the
+# Pushing a version tag (e.g. 0.16.0 on main, or an alpha such as 0.3.0a1 on next)
+# publishes to PyPI and creates the
 # GitHub release. Publishing waits for approval on the protected `pypi` environment.
 on:
   push:
@@ -60,4 +61,10 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md --verify-tag
+        run: |
+          # an alpha, beta or release candidate (0.3.0a1) is a pre-release
+          case "$GITHUB_REF_NAME" in
+            *a*|*b*|*rc*) pre="--prerelease" ;;
+            *) pre="" ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md --verify-tag $pre

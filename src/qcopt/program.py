@@ -8,7 +8,7 @@ calls :meth:`QcoptProgram.compute_batch` to run them in lockstep.
 qcopt's settings are checked by :meth:`QcoptProgram.plan`. The gradients and Hessians
 of every task come from sessions the runner opens (:mod:`qcopt.evaluators`): one per
 task and program, warm-started from geometry to geometry, with each IRC branch its own
-lineage. Called directly, without a runner, qcopt runs its children in this process.
+lineage. Called directly, qcopt hands itself to qccompute's default runner.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from qccompute.program import (
     Plan,
     Resources,
     RunContext,
-    Session,
     find_program,
     plan_of,
 )
@@ -58,8 +57,8 @@ def compute(
             qcopt's settings as ``keywords`` (docs/settings.md), a ``gradient``
             subprogram and optionally a ``hessian`` one, and optionally ``given``
             results at the structure, whose Hessian becomes the starting one.
-        ctx: The runner's context; only a runner passes it. Without it the children
-            run in this process.
+        ctx: The runner's context; only a runner passes it. Without it qcopt hands
+            itself to qccompute's default runner, which runs it on this machine.
 
     Returns:
         The output: ``OptimizationData`` (minima and transition states) or
@@ -168,11 +167,15 @@ class QcoptProgram:
     def compute(
         self, inp: ProgramInput, ctx: RunContext | None = None
     ) -> ProgramOutput[ProgramInput, Data]:
-        """Run one calculation (:func:`compute`).
+        """Run one calculation (:func:`compute`); called directly, on the default runner.
 
         Raises:
             ProgramError: It failed; ``output`` is the failed output.
         """
+        if ctx is None:  # a direct call: the default runner runs it, with a ctx
+            import qccompute
+
+            return qccompute.compute(inp)
         out = self.compute_batch([inp], ctx)[0]
         if not out.success:
             raise _failure(out)
@@ -183,13 +186,17 @@ class QcoptProgram:
     ) -> list[ProgramOutput[ProgramInput, Data]]:
         """Run several calculations in lockstep: one round's children in one call.
 
+        Called directly, the default runner runs them (and calls this with a ctx).
+
         Returns:
             One output per input, in order, failures in place (``success=False``,
             with ``error``): an input qcopt cannot run fails alone, with kind
             ``input``, and the others run.
         """
-        if ctx is None or (ctx.open_session is None and ctx.compute is None):
-            ctx = _direct(None if ctx is None else ctx.threads)
+        if ctx is None:
+            import qccompute
+
+            return qccompute.compute(list(inputs), raise_exc=False)
         outputs: list[ProgramOutput[ProgramInput, Data] | None] = []
         prepared: list[Prepared] = []
         for inp in inputs:
@@ -203,24 +210,10 @@ class QcoptProgram:
             return [out for out in outputs if out is not None]
         ev = evaluator([p.context for p in prepared], ctx)
         try:
-            done = iter(run(prepared, ev))
+            done = iter(run(prepared, ev, ctx.threads))
         finally:
             ev.close()
         return [out if out is not None else next(done) for out in outputs]
-
-
-def _direct(threads: int | None) -> RunContext:
-    """The context of a direct call: children open their sessions as qccompute does.
-
-    Each child program's own sessions when it has them, otherwise a session over
-    ``qccompute.compute``, so every program qccompute runs works as a child.
-    """
-    import qccompute
-
-    def open_session(inp: ProgramInput, share: int | None, calctypes: Any) -> Session:
-        return qccompute.session(inp, threads=share, calctypes=calctypes)
-
-    return RunContext(threads=threads, open_session=open_session)
 
 
 def _input_failure(

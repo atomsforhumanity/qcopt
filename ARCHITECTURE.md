@@ -27,8 +27,8 @@ calculation.prepare ──► algorithms (generators) ◄──► driver.drive 
 
 qcopt is a program with subprograms (`qccompute.program`). Its one Python interface is
 `compute(inp, ctx=None)`: a runner passes `ctx` (the resource grant and the way to open
-child sessions); called directly, qcopt opens its children's sessions as
-`qccompute.session` does. qcopt has no route of its own to programs.
+child sessions); called directly, qcopt hands itself to qccompute's default runner,
+which passes one. qcopt has no route of its own to programs.
 
 ## Modules
 

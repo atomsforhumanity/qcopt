@@ -390,7 +390,7 @@ def evaluator(
     )
 
 
-#: Opens a session: (input, threads, calctypes) -> Session, as ``RunContext.open_session``.
+#: Opens a session: (input, threads, calctypes) -> Session, as ``RunContext.session`` does.
 OpenSession = Callable[[ProgramInput, "int | None", "set[str]"], Session]
 
 
@@ -408,7 +408,7 @@ class SessionEvaluator:
     Args:
         open_session: Opens a session from the child's input (its spec at the task's
             starting structure), its threads and the calctypes it serves:
-            ``RunContext.open_session``, or ``qccompute.session`` with those keywords.
+            ``RunContext.session`` with those keywords.
         threads: The threads to share among the tasks' sessions (None: the
             programs' own settings).
     """
