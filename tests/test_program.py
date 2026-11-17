@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import qccompute
 import qccompute.program as program_protocol
+from qccompute.program import FunctionProgram
 from qccompute.testing import toy
 from qcdata import (
     CalcType,
@@ -375,3 +376,47 @@ def test_numerics_name_the_calculation_type_and_qcref_s_data():
         "irc:"
     )
     assert ts.split("+qcref:")[1] == program.numerics(_input()).split("+qcref:")[1]
+
+
+class _BatchedSurface(FunctionProgram):
+    """A program without sessions that computes batches, as an ML potential does."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.batches = []
+
+    def capabilities(self):
+        return super().capabilities().model_copy(update={"batches": True})
+
+    def compute_batch(self, inputs, ctx=None):
+        self.batches.append(len(inputs))
+        outs = []
+        for inp in inputs:
+            try:
+                outs.append(self.compute(inp, ctx))
+            except ProgramError as e:
+                outs.append(e.output)
+        return outs
+
+
+def test_a_round_of_a_batch_program_is_one_batch_across_tasks():
+    from .helpers import qcopt_input, registered
+
+    surface = _BatchedSurface("mb-batched", muller_brown)
+    starts = [(-0.5, 1.4), (0.6, 0.1), (-0.1, 0.5)]
+    inputs = [
+        qcopt_input(
+            "optimization",
+            Structure(symbols=["H"], geometry=[[x, y, 0.0]]),
+            {"program": "mb-batched"},
+        )
+        for x, y in starts
+    ]
+    with registered(surface):
+        together = qccompute.compute(inputs)
+        assert max(surface.batches) == 3  # every task's gradient of a round at once
+        alone = [qcopt.compute(i) for i in inputs]
+    for a, b in zip(together, alone, strict=True):
+        assert [f.results.energy for f in a.results.frames] == [
+            f.results.energy for f in b.results.frames
+        ]

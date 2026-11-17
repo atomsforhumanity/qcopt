@@ -6,8 +6,10 @@ warm-start from step to step, or a session over its ``compute``
 (:class:`SessionEvaluator`).
 
 Until axtb has sessions of its own, axtb tasks run on :class:`AxtbEvaluator`: axtb in
-this process, one warm-started calculator per task. :func:`evaluator` sends them there
-and every other task to the sessions (:class:`RoutingEvaluator`).
+this process, one warm-started calculator per task. A program without sessions that
+evaluates many inputs at once (an ML potential) gets each round's requests of every task
+as one list through ``ctx.compute`` (:class:`ComputeEvaluator`), so the runner can batch
+them. :func:`route` chooses per task, :func:`evaluator` builds the evaluator.
 """
 
 from __future__ import annotations
@@ -367,14 +369,34 @@ def axtb_in_process(context: TaskContext) -> bool:
     return True
 
 
+def route(context: TaskContext) -> str:
+    """How a task's gradients are computed: ``axtb``, ``compute`` or ``sessions``.
+
+    - ``axtb``: axtb in this process (:func:`axtb_in_process`);
+    - ``compute``: a gradient program without sessions that evaluates many inputs at
+      once (an ML potential on a GPU): every task's requests of a round in one list
+      (:class:`ComputeEvaluator`), which the runner hands it as one batch;
+    - ``sessions``: everything else, the program's own sessions (warm-started) or a
+      session over its ``compute`` (:class:`SessionEvaluator`).
+    """
+    if axtb_in_process(context):
+        return "axtb"
+    program = find_program(context.gradient_spec.program)
+    if program is not None:
+        caps = capabilities_of(program)
+        if caps.batches and not caps.sessions:
+            return "compute"
+    return "sessions"
+
+
 def evaluator(
     contexts: Sequence[TaskContext], ctx: RunContext
 ) -> SessionEvaluator | RoutingEvaluator:
-    """What computes each task: sessions from ``ctx``, axtb in process until it has its own.
+    """What computes each task (:func:`route`), all through ``ctx``.
 
     Args:
         contexts: The tasks.
-        ctx: The runner's context: the grant and the way to open child sessions.
+        ctx: The runner's context: the grant and the way to run subprograms.
 
     Returns:
         The evaluator; ``close()`` closes the sessions it opened.
@@ -386,14 +408,115 @@ def evaluator(
         return ctx.session(inp, threads=threads, calctypes=calctypes)
 
     sessions = SessionEvaluator(open_session, ctx.threads)
-    in_process = [axtb_in_process(c) for c in contexts]
-    if not any(in_process):
+    routes = [route(c) for c in contexts]
+    if set(routes) == {"sessions"}:
         return sessions
+    makers: dict[str, Callable[[], Any]] = {
+        "axtb": lambda: AxtbEvaluator(ctx.threads),
+        "compute": lambda: ComputeEvaluator(ctx),
+        "sessions": lambda: sessions,
+    }
+    used = [k for k in makers if k in routes]
     return RoutingEvaluator(
-        [AxtbEvaluator(ctx.threads), sessions],
-        [0 if a else 1 for a in in_process],
-        contexts,
+        [makers[k]() for k in used], [used.index(k) for k in routes], contexts
     )
+
+
+class ComputeEvaluator:
+    """Every task's requests of a round as one list through ``ctx.compute``.
+
+    For programs without sessions that evaluate many inputs at once: the runner hands
+    the list to the program as one batch, so the gradients of many minimizations are
+    one GPU pass per round.
+
+    Args:
+        ctx: The runner's context.
+    """
+
+    def __init__(self, ctx: RunContext) -> None:
+        """Bind the context."""
+        self.ctx = ctx
+
+    def supports_hessian(self, context: TaskContext) -> bool:
+        """Hessians come from the Hessian subprogram when one is given."""
+        return context.hessian_spec is not None
+
+    def hessian_includes_gradient(self, context: TaskContext) -> bool:
+        """No: a program's Hessian output need not carry the gradient."""
+        return False
+
+    def __call__(self, requests: Sequence[Request]) -> list[Answer]:
+        """Compute all requests in one list; failures in place."""
+        inputs = []
+        for r in requests:
+            ctx = r.context
+            spec = ctx.hessian_spec if r.kind == "hessian" else ctx.gradient_spec
+            assert spec is not None  # Hessians are asked for only with a Hessian spec
+            structure = ctx.extras.get("structure")
+            if structure is None:
+                structure = Structure(
+                    symbols=ctx.symbols,
+                    geometry=r.positions,
+                    charge=ctx.charge,
+                    multiplicity=ctx.multiplicity,
+                )
+            else:
+                structure = structure.model_copy(
+                    update={"geometry": np.asarray(r.positions, dtype=float)}
+                )
+            inputs.append(ProgramInput.from_spec(spec, structure))
+        outputs = self.ctx.compute(inputs, raise_exc=False)
+        return [
+            _compute_answer(r, out) for r, out in zip(requests, outputs, strict=True)
+        ]
+
+
+def _compute_answer(r: Request, out: Any) -> Answer:
+    """One request's answer from its ``ProgramOutput``; unreadable ones fail."""
+    x = np.asarray(r.positions, dtype=float)
+    res = getattr(out, "results", None)
+    prov = getattr(res, "provenance", None)
+    program = getattr(prov, "program", None)
+    version = getattr(prov, "program_version", None)
+    if not getattr(out, "success", False):
+        tb = getattr(out, "traceback", None)
+        return Answer(
+            positions=x,
+            success=False,
+            error=summary(getattr(out, "error", None), tb),
+            traceback=tb,
+            output=out,
+            program=program,
+            program_version=version,
+        )
+    try:
+        energy = getattr(res, "energy", None)
+        gradient = getattr(res, "gradient", None)
+        hessian = getattr(res, "hessian", None)
+        if r.kind == "gradient" and (energy is None or gradient is None):
+            raise ValueError("the output has no energy or gradient")
+        if r.kind == "hessian" and hessian is None:
+            raise ValueError("the output has no Hessian")
+        return Answer(
+            positions=x,
+            energy=float("nan") if energy is None else float(energy),
+            gradient=None
+            if gradient is None
+            else np.asarray(gradient, dtype=float).reshape(-1, 3),
+            hessian=None if hessian is None else np.asarray(hessian, dtype=float),
+            output=out,
+            program=program,
+            program_version=version,
+        )
+    except Exception as exc:  # noqa: BLE001 - reported in the answer
+        return Answer(
+            positions=x,
+            success=False,
+            error=f"reading the {program or 'program'} output: {exc}",
+            output=out,
+            program=program,
+            program_version=version,
+        )
 
 
 #: Opens a session: (input, threads, calctypes) -> Session, as ``RunContext.session`` does.

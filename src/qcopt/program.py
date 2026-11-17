@@ -120,13 +120,19 @@ class QcoptProgram:
         return _version() or "unknown"
 
     def capabilities(self) -> Capabilities:
-        """Minima, transition states and IRCs; inputs of a batch advance together."""
+        """Minima, transition states and IRCs; inputs of a batch advance together.
+
+        ``gpu``: its children may use GPUs (an ML potential), so the runner grants
+        the GPUs its plan asks for (the children's) and passes them on in ``ctx``;
+        a plan whose children use none gets none.
+        """
         return Capabilities(
             calctypes=frozenset(CALCTYPES),
             sessions=False,
             batches=True,
             in_process=True,
             thread_safe=False,
+            gpu=True,
         )
 
     def numerics(self, spec: ProgramInput | ProgramSpec) -> str:

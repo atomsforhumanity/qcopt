@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+### Fixed
+
+- Children on GPUs get them: qcopt declares the `gpu` capability, so a runner grants
+  the GPUs its plan asks for (its children's) and passes them on. In 0.3.0a1 an ML
+  potential child ran on the CPU under a runner.
+- A gradient program without sessions that computes batches (an ML potential) gets
+  every calculation's requests of a round as one list (`ctx.compute`), which the
+  runner hands it as one batch: 64 AIMNet2 minimizations on a GPU took 16 s as one
+  list, against 52 s for 8 in 0.3.0a1 (one worker and one structure per call for
+  each calculation).
+- The in-process axtb route runs calculations side by side within the granted
+  threads (one at a time in 0.3.0a1), and an axtb SCF that does not converge is a
+  `convergence` failure of the child (was `internal`).
+
 ## [0.3.0a1] - 2026-11-17
 
 The first alpha of qcopt 0.3, on the alphas of AFH's redesigned qc* stack (qcdata
