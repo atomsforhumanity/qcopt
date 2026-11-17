@@ -13,6 +13,9 @@ lineage. Called directly, without a runner, qcopt runs its children in this proc
 
 from __future__ import annotations
 
+import functools
+import hashlib
+import json
 from collections.abc import Sequence
 from typing import Any
 
@@ -32,8 +35,11 @@ from qcdata import (
     ProgramError,
     ProgramInput,
     ProgramOutput,
+    ProgramSpec,
     Resolved,
 )
+from qcref import constants as c
+from qcref import periodic_table as pt
 
 from .calculation import CALCTYPES, PROGRAM, Prepared, _version, prepare, run
 from .errors import InputError
@@ -68,6 +74,37 @@ def compute(
     return program.compute(inp, ctx)
 
 
+#: qcopt's numerics epoch per calculation type. Bump a type's epoch whenever its golden
+#: trajectories change (results for an unchanged input may change); never for
+#: bit-identical changes.
+NUMERICS_EPOCHS = {"optimization": 1, "transition_state": 1, "irc": 1}
+
+
+@functools.cache
+def _qcref_digest() -> str:
+    """A short digest of the qcref data qcopt's numbers depend on.
+
+    Atomic masses (mass-weighted IRCs, frequencies), covalent and van der Waals radii
+    (internal-coordinate connectivity), and the constants of the frequency units.
+    """
+    elements = sorted((pt[key] for key in pt), key=lambda e: int(e.number))
+    data = [
+        [int(e.number)]
+        + [
+            None if v is None else repr(float(v))
+            for v in (e.mass, e.cov_radius, e.vdw_radius)
+        ]
+        for e in elements
+    ]
+    data.append(
+        [
+            repr(float(c.phys.ELECTRON_MASS_IN_U)),
+            repr(float(c.phys.HARTREE_INVERSE_METER_RELATIONSHIP)),
+        ]
+    )
+    return hashlib.sha256(json.dumps(data).encode()).hexdigest()[:12]
+
+
 def _failure(out: ProgramOutput[ProgramInput, Data]) -> ProgramError:
     """The exception for a failed output, which it carries as ``output``."""
     assert out.error is not None  # every failed qcopt output has one
@@ -92,6 +129,17 @@ class QcoptProgram:
             in_process=True,
             thread_safe=False,
         )
+
+    def numerics(self, spec: ProgramInput | ProgramSpec) -> str:
+        """What identifies qcopt's numbers for a calculation, for a store's reuse rule.
+
+        The calculation type's epoch (:data:`NUMERICS_EPOCHS`) and a digest of the
+        qcref data qcopt reads, such as ``"transition_state:1+qcref:1a2b3c4d5e6f"``. It
+        changes whenever results for an unchanged input may change. The subprograms'
+        numbers are their own programs' numerics.
+        """
+        calctype = CalcType(spec.calctype).value
+        return f"{calctype}:{NUMERICS_EPOCHS[calctype]}+qcref:{_qcref_digest()}"
 
     def settings_schema(self, calctype: CalcType) -> dict[str, Any]:
         """The JSON Schema of the settings (``keywords``) of ``calctype``."""

@@ -110,6 +110,9 @@ programs, guide modes, batched runs).
   without a Hessian are an error (`not_applicable`). An IRC from a search with
   `freq.check` passes the search's last frame's `results` as `given`: one gradient at
   the transition state instead of a Hessian, and the same path.
+- `numerics(spec)`: what identifies qcopt's numbers for a calculation type, for a
+  store's reuse rule: an epoch per calculation type, bumped whenever its results may
+  change, and a digest of the qcref data qcopt reads (masses, radii, constants).
 - `Ask.lineage` and `Request.lineage`; evaluators may define `forget(task)`, called when
   a task finishes.
 - The settings' JSON Schema with units and tiers (`settings_schema(calctype)` of the

@@ -384,3 +384,15 @@ def test_a_session_s_group_of_failures_keeps_every_frame():
     # the failed displacement's own error, not the group's
     assert (out.error.program, out.error.cause.kind) == ("muller-brown", "convergence")
     assert out.error.cause.message == "no SCF"
+
+
+def test_numerics_name_the_calculation_type_and_qcref_s_data():
+    from qcopt.program import NUMERICS_EPOCHS
+
+    ts = program.numerics(_input("transition_state"))
+    assert ts == program.numerics(_input("transition_state"))  # stable
+    assert ts.startswith(f"transition_state:{NUMERICS_EPOCHS['transition_state']}+")
+    assert program.numerics(TOY.model_copy(update={"calctype": "irc"})).startswith(
+        "irc:"
+    )
+    assert ts.split("+qcref:")[1] == program.numerics(_input()).split("+qcref:")[1]
