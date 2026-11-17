@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **Requires qccompute 0.23.0a7 and qcdata 0.24.0a8** (the stack's alpha 7). The runner
+  now runs a calculation that names subprograms on one BLAS and OpenMP thread for its
+  own work, and gives its grant to the subprograms. qcopt's steps are small dense
+  linear algebra, so they always run on one thread, whatever `OPENBLAS_NUM_THREADS`
+  says. Results no longer depend on that variable. On earlier versions, with it unset,
+  qcopt's idle BLAS threads kept spinning while the gradient program ran, which made
+  many calculations sharing a machine several times slower.
 - An IRC branch's record (`record["branches"][name]`) gives `steps`, the gradient
   calculations it took with retried overshoots included (what `convergence.max_iter`
   counts), and `frames`, the points it kept. `steps` was the frame count, so a branch

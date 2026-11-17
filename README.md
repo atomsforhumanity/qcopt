@@ -70,7 +70,8 @@ warm-started from geometry to geometry (each IRC branch its own lineage), under 
 runner's resources. Called directly, `qcopt.compute` hands itself to qccompute's default
 runner, which runs it on this machine.
 
-A qcopt calculation asks the runner for the threads its children's plans ask for. A child
+A qcopt calculation asks the runner for the threads its children's plans ask for, and
+the runner gives them to the children: qcopt's own steps run on one BLAS thread. A child
 that names no number (axtb without `threads`) asks for all of them, which a lone search
 uses well. Many calculations submitted one by one (`qccompute.submit`) then run one at a
 time: give the child's spec `threads` (often 1 for small molecules), or pass them as one
