@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.3.0a4] - 2026-11-17
+
+### Changed
+
+- Requires the stack's alpha 5: qcdata 0.24.0a6 and qccompute 0.23.0a5. qcopt
+  0.3.0a3 fails on alpha 4 and later: it declared `Capabilities(gpu=True)`, a field
+  qccompute 0.23.0a4 removed. GPUs come from qcopt's plan, which asks for what its
+  children's plans ask for, as before.
+
 ### Added
 
 - `qcopt.__version__`, like the other packages of the stack.
@@ -334,7 +343,8 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
   `find_ts` and `irc` names the Hessian program only, and other values are errors
   (a string was ignored).
 
-[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a3...HEAD
+[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a4...HEAD
+[0.3.0a4]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a4
 [0.3.0a3]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a3
 [0.3.0a2]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a2
 [0.3.0a1]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a1

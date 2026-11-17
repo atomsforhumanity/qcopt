@@ -122,9 +122,8 @@ class QcoptProgram:
     def capabilities(self) -> Capabilities:
         """Minima, transition states and IRCs; inputs of a batch advance together.
 
-        ``gpu``: its children may use GPUs (an ML potential), so the runner grants
-        the GPUs its plan asks for (the children's) and passes them on in ``ctx``;
-        a plan whose children use none gets none.
+        GPUs are the plan's: :meth:`plan` asks for what the children's plans ask for
+        (an ML potential's), and the runner passes the grant on in ``ctx``.
         """
         return Capabilities(
             calctypes=frozenset(CALCTYPES),
@@ -132,7 +131,6 @@ class QcoptProgram:
             batches=True,
             in_process=True,
             thread_safe=False,
-            gpu=True,
         )
 
     def numerics(self, spec: ProgramInput | ProgramSpec) -> str:
