@@ -40,9 +40,10 @@ from qcdata import (
 from qcref import constants as c
 from qcref import periodic_table as pt
 
+from .algorithms.reaction_path import BRANCH_ENDS
 from .calculation import CALCTYPES, PROGRAM, Prepared, _version, prepare, run
 from .errors import InputError
-from .evaluators import evaluator, same_spec, unseen_axtb
+from .evaluators import evaluator, same_spec
 from .options import options_schema
 
 
@@ -139,21 +140,45 @@ class QcoptProgram:
         The calculation type's epoch (:data:`NUMERICS_EPOCHS`) and a digest of the
         qcref data qcopt reads, such as ``"transition_state:1+qcref:1a2b3c4d5e6f"``. It
         changes whenever results for an unchanged input may change. The subprograms'
-        numbers are their own programs' numerics, except axtb's where qcopt runs it in
-        this process and no runner sees it (``"+axtb:0.1.1"``, :func:`unseen_axtb`).
+        numbers are their own programs' numerics, which the runner records.
         """
         calctype = CalcType(spec.calctype).value
-        own = f"{calctype}:{NUMERICS_EPOCHS[calctype]}+qcref:{_qcref_digest()}"
-        axtb = unseen_axtb(spec)
-        return own if axtb is None else f"{own}+axtb:{axtb}"
+        return f"{calctype}:{NUMERICS_EPOCHS[calctype]}+qcref:{_qcref_digest()}"
 
     def settings_schema(self, calctype: CalcType) -> dict[str, Any]:
         """The JSON Schema of the settings (``keywords``) of ``calctype``."""
         return options_schema(CalcType(calctype).value)
 
     def record_schema(self, calctype: CalcType) -> dict[str, Any]:
-        """The record's shape: diagnostics, not stable across versions."""
-        return {"type": "object"}
+        """The record's shape: diagnostics, not stable across versions.
+
+        Declared: ``hessian_frames`` and, for an IRC, each branch's ``end`` (a code of
+        :data:`~qcopt.algorithms.reaction_path.BRANCH_ENDS`).
+        """
+        props: dict[str, Any] = {
+            "converged": {"type": "boolean"},
+            "n_gradients": {"type": "integer"},
+            "n_hessians": {"type": "integer"},
+            "hessian_frames": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "The frames at which a Hessian was computed.",
+            },
+        }
+        if CalcType(calctype) == CalcType.irc:
+            props["branches"] = {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "end": {"enum": list(BRANCH_ENDS)},
+                        "steps": {"type": "integer"},
+                        "error": {"type": "string"},
+                    },
+                    "required": ["end", "steps"],
+                },
+            }
+        return {"type": "object", "properties": props}
 
     def plan(self, inp: ProgramInput) -> Plan:
         """Check the input and resolve every ``auto``; resources from the children.

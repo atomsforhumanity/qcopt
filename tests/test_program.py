@@ -435,19 +435,14 @@ def test_numerics_name_the_calculation_type_and_qcref_s_data():
     assert ts.split("+qcref:")[1] == program.numerics(_input()).split("+qcref:")[1]
 
 
-def test_numerics_name_axtb_where_qcopt_runs_it_and_no_runner_sees_it(monkeypatch):
+def test_numerics_are_qcopt_s_own_and_the_runner_names_each_child():
     pytest.importorskip("axtb")
-    from importlib import metadata
-
     axtb = ProgramSpec(program="axtb", calctype="gradient", model={"method": "gfn2"})
-    with_axtb = program.numerics(_input(children=[axtb]))
-    assert with_axtb == program.numerics(_input()) + "+axtb:" + metadata.version("axtb")
-    # once axtb is a program, the runner records it
-    monkeypatch.setattr(
-        "qcopt.evaluators.find_program",
-        lambda name: object() if name == "axtb" else None,
-    )
-    assert program.numerics(_input(children=[axtb])) == program.numerics(_input())
+    inp = _input(children=[axtb], convergence={"max_iter": 1})
+    assert program.numerics(inp) == program.numerics(_input())
+    out = qccompute.compute(inp, raise_exc=False)
+    assert set(out.execution.identities) == {"qcopt", "axtb"}
+    assert "+axtb" not in out.execution.identities["qcopt"]
 
 
 class _BatchedSurface(FunctionProgram):

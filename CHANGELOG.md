@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+### Changed
+
+- **axtb runs through its own sessions** (axtb 0.2). qcopt's in-process route for axtb
+  0.1, which had no sessions, is gone: `qcopt[axtb]` now installs `axtb>=0.2.0a1`, the
+  runner records axtb's identity, and qcopt's own numerics no longer append
+  `+axtb:<version>`. axtb 0.2 renamed its SCF factor to `accuracy_scale` (axtb 0.1's
+  `accuracy`); the examples use it.
+- **Whether a Hessian program computes the gradient program's own surface** is read
+  from the children's settings schemas: keys whose `x-concern` is `model` or
+  `approximation` define the surface; convergence, algorithm, resource and output keys
+  don't. This replaces a table of axtb 0.1's keywords, which named none of axtb 0.2's
+  (a `hessian` or `scf` group would have made an axtb Hessian "another method's"). A
+  program without a schema compares every keyword but `threads`, as before.
+- **Each IRC branch ends with a code** (`record["branches"][name]["end"]`):
+  `converged`, `converged_flat`, `max_iter`, `energy_rose`, `stalled`, `no_descent`
+  or `gradient_failed`, with the failed calculation's message under `error`. These
+  were free text such as `"gradient failed: <message>"`. `record_schema()` declares
+  them, with `hessian_frames`. Error messages are unchanged.
+
 ## [0.3.0a5] - 2026-11-17
 
 ### Added

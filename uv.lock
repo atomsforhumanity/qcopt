@@ -82,15 +82,16 @@ wheels = [
 
 [[package]]
 name = "axtb"
-version = "0.1.0"
+version = "0.2.0a1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "qcdata" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5a/68/7bb96d5b3935594e0df0427b5770eb3d55e0e9ade8847b505582cdc427ef/axtb-0.1.0.tar.gz", hash = "sha256:9b00ac19890de20c5e7f6699819719be3568c46eda265390987b8180fe3e0c05", size = 1128682, upload-time = "2026-11-07T20:24:55.159Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/62/fec017fe9ff2c7e735f76ff94906f5a473cf2b0293b14c55e7989d062902/axtb-0.2.0a1.tar.gz", hash = "sha256:ac3abf09abf3fb080ca09d18322aa49b8924049b70c9d366d90c9de1ba9daa03", size = 1298518, upload-time = "2026-11-17T11:19:03.436Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e2/a7/9f732a55c116d589fc1158ed84ab4ea712a8c6e0e197e63cf02c6c024d61/axtb-0.1.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:892a9d7d7287b87a0d03bb3a4bc97b8d0992882f85a900457ca9890b193abb9f", size = 3194303, upload-time = "2026-11-07T20:24:53.404Z" },
+    { url = "https://files.pythonhosted.org/packages/07/20/a8f31dcf6c513f39dde10f29b6d7a04e878738ec91fc8210560fee20f06d/axtb-0.2.0a1-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:aabeca859f982d149c4fdea5947aafcd5ad3435ef8dc39d2805b7141a45aaed2", size = 3344598, upload-time = "2026-11-17T11:19:01.531Z" },
 ]
 
 [[package]]
@@ -1197,7 +1198,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "axtb", marker = "extra == 'axtb'", specifier = ">=0.1.0" },
+    { name = "axtb", marker = "extra == 'axtb'", specifier = ">=0.2.0a1" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "qccompute", specifier = ">=0.23.0a5" },

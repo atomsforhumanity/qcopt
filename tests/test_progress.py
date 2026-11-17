@@ -130,3 +130,24 @@ def test_a_given_hessian_is_not_one_of_the_computed():
     assert out.resolved.settings["hessian"]["initial"] == "given"
     assert out.results.ts_index not in out.record["hessian_frames"]
     assert out.results.frames[out.results.ts_index].results.hessian is None
+
+
+def test_each_irc_branch_ends_with_a_code_the_record_schema_names():
+    from qcopt.algorithms.reaction_path import BRANCH_ENDS
+    from qcopt.program import program
+
+    inp = qcopt_input(
+        "irc", _h(*MB_SADDLES[0]), MB, hessian_program=True, convergence={"max_iter": 3}
+    )
+    out = qccompute.compute(inp, raise_exc=False)
+    assert (out.error.kind, out.error.code) == ("convergence", "irc_incomplete")
+    ends = {name: b["end"] for name, b in out.record["branches"].items()}
+    assert ends == {"forward": "max_iter", "reverse": "max_iter"}
+    assert "the forward branch stopped: max_iter" in out.error.message
+    schema = program.record_schema("irc")["properties"]["branches"]
+    assert schema["additionalProperties"]["properties"]["end"]["enum"] == list(BRANCH_ENDS)
+    # with its ends minimized, the same IRC is a success
+    inp = inp.model_copy(update={"keywords": {**inp.keywords, "ends": {"minimize": True}}})
+    out = qccompute.compute(inp)
+    assert out.success
+    assert {b["end"] for b in out.record["branches"].values()} == {"max_iter"}

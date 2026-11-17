@@ -206,6 +206,24 @@ def irc(
     )
 
 
+#: How an IRC branch ended (``record["branches"][name]["end"]``), with the words its
+#: error message uses: ``converged`` (gradient and curvature criteria),
+#: ``converged_flat`` (a flat end, checked with exact Hessians), ``max_iter``,
+#: ``energy_rose`` (even a tiny step passed the valley floor), ``stalled`` (no way
+#: down on the model), ``no_descent`` (no step down from the transition state) and
+#: ``gradient_failed`` (a gradient calculation failed; the branch's ``error`` says
+#: why).
+BRANCH_ENDS = {
+    "converged": "converged",
+    "converged_flat": "converged (flat)",
+    "max_iter": "max_iter",
+    "energy_rose": "energy rose",
+    "stalled": "stalled",
+    "no_descent": "no descent from the transition state",
+    "gradient_failed": "gradient failed",
+}
+
+
 @dataclass
 class _Branch:
     """One direction of an IRC: where it is, its Hessian, and how it is doing."""
@@ -219,7 +237,8 @@ class _Branch:
     ds: float  # the current step length
     frames: list[Answer] = field(default_factory=list)
     done: bool = False
-    reason: str | None = None
+    reason: str | None = None  # how it ended: a key of BRANCH_ENDS
+    error: str | None = None  # for gradient_failed: the calculation's error
     steps: int = 0
     since_hessian: int = 0
     need_hessian: bool = False  # the next ask is the last point again, for its Hessian
@@ -232,19 +251,31 @@ class _Branch:
     tiny_steps: int = 0
     failure: Answer | None = None  # the calculation that stopped it
 
-    def finish(self, reason: str) -> None:
-        """End the branch."""
-        self.done, self.reason = True, reason
+    def finish(self, reason: str, error: str | None = None) -> None:
+        """End the branch: ``reason`` is a key of :data:`BRANCH_ENDS`."""
+        self.done, self.reason, self.error = True, reason, error
 
     @property
     def ended(self) -> bool:
         """Whether it reached the end of the path (rather than failing or stopping)."""
-        return (self.reason or "").startswith("converged")
+        return self.reason in ("converged", "converged_flat")
 
     @property
     def gradient_failed(self) -> bool:
         """Whether a gradient calculation stopped it."""
-        return (self.reason or "").startswith("gradient failed")
+        return self.reason == "gradient_failed"
+
+    def why(self) -> str:
+        """How it ended, in words (``gradient failed: <error>``)."""
+        text = BRANCH_ENDS.get(self.reason or "", str(self.reason))
+        return f"{text}: {self.error}" if self.error is not None else text
+
+    def end_record(self) -> dict[str, Any]:
+        """Its entry in ``record["branches"]``."""
+        entry: dict[str, Any] = {"end": self.reason, "steps": len(self.frames)}
+        if self.error is not None:
+            entry["error"] = self.error
+        return entry
 
 
 class _IRC:
@@ -377,7 +408,7 @@ class _IRC:
                 return
             b.steps += 1
             b.failure = ans
-            b.finish(f"gradient failed: {ans.error}")
+            b.finish("gradient_failed", str(ans.error))
             return
         b.steps += 1
         g_new = np.asarray(ans.gradient, dtype=float).ravel()
@@ -387,7 +418,7 @@ class _IRC:
                 # The first step went past a valley: shorter along the mode.
                 b.ds *= 0.5
                 if b.ds < opts.irc.step * MIN_STEP_FRACTION:
-                    b.finish("no descent from the transition state")
+                    b.finish("no_descent")
                 else:
                     b.next = self._along_mode(b.sign * b.ds)
                 return
@@ -398,7 +429,7 @@ class _IRC:
                 b.h = self.update(b.h, dx, y)
             b.ds *= 0.5
             if b.ds < opts.irc.step * MIN_STEP_FRACTION:
-                b.finish("energy rose")
+                b.finish("energy_rose")
             else:
                 b.next = self._next_point(b)
             return
@@ -521,7 +552,7 @@ class _IRC:
                 return True
             checked = b.end_checks >= MAX_END_CHECKS
             if checked and de_last < opts.convergence.e_tol:
-                b.finish("converged (flat)")
+                b.finish("converged_flat")
                 return True
         if b.steps >= opts.convergence.max_iter:
             b.finish("max_iter")
@@ -595,7 +626,7 @@ class _IRC:
             # the path has reached the bottom along its direction; it ends there if
             # its gradient is close to the end criterion.
             ended = b.ended or (
-                b.reason in ("energy rose", "stalled")
+                b.reason in ("energy_rose", "stalled")
                 and b.gmax < ENERGY_ROSE_GMAX * opts.convergence.g_tol
             )
             end = ends.get(b.name)
@@ -607,16 +638,14 @@ class _IRC:
                     f"the {b.name} branch did not go downhill from the transition state"
                 )
             elif not ended and not (opts.ends.minimize and end is not None):
-                why = b.reason
-                if b.reason in ("energy rose", "stalled"):
-                    why = f"{b.reason} with the gradient at {b.gmax:.1e} Hartree/bohr"
+                why = b.why()
+                if b.reason in ("energy_rose", "stalled"):
+                    why = f"{why} with the gradient at {b.gmax:.1e} Hartree/bohr"
                 unfinished.append(f"the {b.name} branch stopped: {why}")
         info = {
             "n_gradients": self.count.gradients,
             "n_hessians": self.count.hessians,
-            "branches": {
-                b.name: {"end": b.reason, "steps": len(b.frames)} for b in self.branches
-            },
+            "branches": {b.name: b.end_record() for b in self.branches},
             "ends": ends,
             "ts_curvature": self.ts_curvature,
         }

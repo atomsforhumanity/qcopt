@@ -2,8 +2,9 @@
 
 Minimizations, transition-state searches, and IRCs for the qc* stack. Inputs and outputs
 are [qcdata](https://github.com/atomsforhumanity/qcdata) objects; gradients and Hessians
-come from [axtb](https://github.com/atomsforhumanity/axtb) in-process or from any program
-qccompute runs.
+come from any program qccompute runs, such as
+[axtb](https://github.com/atomsforhumanity/axtb) (g-xTB and GFN2-xTB) or a DFT code,
+through its sessions, which warm-start from step to step.
 
 A qcopt calculation is a qcdata `ProgramInput`: the calculation type, the starting
 structure, qcopt's settings as `keywords`, and the programs that compute gradients (and
@@ -13,9 +14,9 @@ Hessians) as `subprograms`. `qcopt.compute` runs it:
 import qcopt
 from qcdata import ProgramInput, Structure
 
-# accuracy 0.01: at axtb's default SCF accuracy, g-xTB gradients carry ~1e-5 Eh/bohr
-# of noise, the size of qcopt's convergence threshold (12% more time per gradient).
-gxtb = {"program": "axtb", "model": {"method": "gxtb-v2.0.1"}, "keywords": {"accuracy": 0.01}}
+# accuracy_scale 0.01: at axtb's default SCF accuracy, g-xTB gradients carry ~1e-5
+# Eh/bohr of noise, the size of qcopt's convergence threshold (12% more time per gradient).
+gxtb = {"program": "axtb", "model": {"method": "gxtb-v2.0.1"}, "keywords": {"accuracy_scale": 0.01}}
 
 ts = qcopt.compute(
     ProgramInput(
@@ -35,7 +36,7 @@ program than the gradients', often a cheaper method: the frames keep the gradien
 program's energies and gradients.
 
 ```python
-gfn2 = {"program": "axtb", "model": {"method": "gfn2"}, "keywords": {"accuracy": 0.01}}
+gfn2 = {"program": "axtb", "model": {"method": "gfn2"}, "keywords": {"accuracy_scale": 0.01}}
 subprograms = [{**gxtb, "calctype": "gradient"}, {**gfn2, "calctype": "hessian"}]
 ```
 
@@ -152,14 +153,15 @@ gradients; results are summarized in AFH's findings.
 
 ```sh
 pip install --pre "qcopt==0.3.0a5"         # on the stack's alpha 5 (qcdata 0.24.0a6, qccompute 0.23.0a5)
-pip install --pre "qcopt[axtb]==0.3.0a5"   # with axtb: in-process g-xTB and GFN2-xTB, analytic Hessians
+pip install --pre "qcopt[axtb]==0.3.0a5"   # with axtb: g-xTB and GFN2-xTB, analytic Hessians
 ```
 
 This README describes the 0.3 alphas. Without `--pre`, pip installs qcopt 0.2, whose
 interface differs.
 
-[axtb](https://github.com/atomsforhumanity/axtb) 0.1.0 or newer. Its wheels are for x86-64
-Linux; elsewhere pip builds it from source, which needs Rust.
+The `axtb` extra installs [axtb](https://github.com/atomsforhumanity/axtb) 0.2 or newer, the
+first with sessions. Its wheels are for x86-64 Linux; elsewhere pip builds it from source,
+which needs Rust.
 
 ## Status
 

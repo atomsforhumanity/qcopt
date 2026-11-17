@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
-from qcdata import Structure
+import qccompute
+from qcdata import ProgramInput, Structure
 
 from qcopt.geometry import rmsd
 from qcopt.vibrations import frequencies
@@ -88,7 +89,7 @@ def test_lockstep_minimizations_match_single_runs():
 GXTB = {
     "program": "axtb",
     "model": {"method": "gxtb-v2.0.1"},
-    "keywords": {"accuracy": 0.01},  # SCF noise well below the convergence threshold
+    "keywords": {"accuracy_scale": 0.01},  # SCF noise well below convergence
 }
 
 
@@ -99,23 +100,30 @@ def test_gxtb_ts_from_gfn2_hessians():
     )
     assert ts.success, ts.traceback
     assert ts.record["n_hessians"] >= 2
-    check = axtb.Calculator(
-        "gxtb-v2.0.1", [6, 7, 1], ts.results.frames[0].structure.geometry, accuracy=0.01
-    )
+
+    def check(calctype, structure):
+        inp = ProgramInput(
+            program="axtb",
+            calctype=calctype,
+            structure=structure,
+            model=GXTB["model"],
+            keywords=GXTB["keywords"],
+        )
+        return qccompute.compute(inp).results
+
     for frame in (ts.results.frames[0], ts.results.frames[-1]):
-        e = check.singlepoint(frame.structure.geometry)["energy"]
+        e = check("energy", frame.structure).energy
         assert frame.results.energy == pytest.approx(e, abs=1e-7)
         assert frame.results.hessian is None
     # A g-xTB Hessian at the result: still a first-order saddle.
-    h = check.hessian(ts.results.final_structure.geometry, vibrations=False)["hessian"]
+    h = check("hessian", ts.results.final_structure).hessian
     f = frequencies(np.asarray(h), ["C", "N", "H"], ts.results.final_structure.geometry)
     assert f.n_imaginary(10.0) == 1
 
 
 def test_an_scf_that_does_not_converge_is_the_child_s_convergence_failure():
-    spec = {**GFN2, "keywords": {"max_iter": 2}}  # two SCF iterations
+    spec = {**GFN2, "keywords": {"scf": {"max_iter": 2}}}  # two SCF iterations
     out = minimize(WATER, spec)
     assert not out.success
     assert (out.error.kind, out.error.program) == ("program", "axtb")
     assert out.error.cause.kind == "convergence"
-    assert "ScfNotConvergedError" in out.error.cause.message

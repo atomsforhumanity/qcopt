@@ -8,9 +8,11 @@ choice was measured against, so you can tell when your system is different.
 ## The gradient program's SCF accuracy
 
 At axtb's default SCF accuracy (1.0), g-xTB gradients carry about 1e-5 Eh/bohr of noise
-(at most 4.4e-5), the size of qcopt's convergence threshold. With `accuracy: 0.01` in the
-gradient program's keywords the noise is gone, for about 12% more time per gradient. Set
-it explicitly: optimizers stall or fail their final checks on noisy gradients. Other
+(at most 4.4e-5), the size of qcopt's convergence threshold. With `accuracy_scale: 0.01`
+in the gradient program's keywords (axtb 0.1 called it `accuracy`) the noise is gone, for
+about 12% more time per gradient. axtb 0.2 also takes the shared targets, such as
+`accuracy: {"gradient": 2e-6}`, about a tenth of `convergence.g_tol`. Set one
+explicitly: optimizers stall or fail their final checks on noisy gradients. Other
 programs have the same issue with their own SCF thresholds.
 
 ## `convergence.g_tol`

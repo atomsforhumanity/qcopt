@@ -5,18 +5,14 @@ session the runner opens (``RunContext.session``): the program's own sessions, w
 warm-start from step to step, or a session over its ``compute``
 (:class:`SessionEvaluator`).
 
-Until axtb has sessions of its own, axtb tasks run on :class:`AxtbEvaluator`: axtb in
-this process, one warm-started calculator per task. A program without sessions that
-evaluates many inputs at once (an ML potential) gets each round's requests of every task
+A program without sessions that evaluates many inputs at once (an ML potential) gets each round's requests of every task
 as one list through ``ctx.compute`` (:class:`ComputeEvaluator`), so the runner can batch
 them. :func:`route` chooses per task, :func:`evaluator` builds the evaluator.
 """
 
 from __future__ import annotations
 
-import os
 import re
-import traceback
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -95,187 +91,78 @@ def summary(error: Any, traceback_text: str | None) -> str:
     return lines[-1] if lines else "the calculation failed"
 
 
-# axtb.Calculator keywords a ProgramSpec may set; everything else is rejected.
-_AXTB_CALCULATOR = frozenset(
-    {
-        "accuracy",
-        "etemp",
-        "max_iter",
-        "threads",
-        "conventions",
-        "mixer",
-        "alpb",
-        "gbsa",
-        "solvation_state",
-        "solvation_correction",
-        "correction_conventions",
-    }
-)
-_AXTB_HESSIAN = frozenset({"hessian_method", "hessian_step", "hessian_accuracy"})
-
-# Keywords that change how a calculation runs or how its Hessian is computed, but not
-# its energy surface, by program; ``threads`` for every program.
-_NOT_SURFACE: dict[str, frozenset[str]] = {
-    "axtb": _AXTB_HESSIAN | {"threads", "max_iter", "mixer"}
-}
+#: The concerns (qcdata's conventions: ``x-concern`` on every settings key) of the keys
+#: that define a calculation's energy surface. Convergence, algorithm, resource and
+#: output keys do not: a Hessian computed tighter or another way is still the same
+#: method's.
+SURFACE_CONCERNS = frozenset({"model", "approximation"})
 
 
 def surface_keywords(spec: Any) -> dict[str, Any]:
-    """A spec's keywords that define its energy surface."""
-    skip = _NOT_SURFACE.get(getattr(spec, "program", ""), frozenset({"threads"}))
-    return {k: v for k, v in dict(spec.keywords).items() if k not in skip}
+    """A spec's keywords that define its energy surface.
 
-
-class AxtbEvaluator:
-    """axtb in this process: one Calculator per calculation, reused step to step.
-
-    Args:
-        threads: The CPU threads granted (the runner's ``ctx.threads``); None: the
-            cores this process may use. Calculations run side by side, as many as the
-            granted threads divided by the threads each one uses.
+    The program's settings schema says (the keys whose ``x-concern`` is in
+    :data:`SURFACE_CONCERNS`; a key it does not know or gives no concern counts). Without
+    a schema (a program not found, or one that publishes none), every key but
+    ``threads``.
     """
+    keywords = dict(spec.keywords)
+    schema = _settings_schema(spec)
+    if schema is None:
+        return {k: v for k, v in keywords.items() if k != "threads"}
+    return _surface(keywords, schema, schema)
 
-    def __init__(self, threads: int | None = None) -> None:
-        """Import axtb and set up the calculator cache."""
-        import axtb
 
-        self._axtb = axtb
-        self.threads = threads
-        self.version = _version("axtb")
-        # (task, kind) -> (the calculator's setup, the calculator); a new setup (another
-        # run's task with the same index) replaces it
-        self._calcs: dict[tuple[int, str], tuple[tuple[Any, ...], Any]] = {}
+def _settings_schema(spec: Any) -> dict[str, Any] | None:
+    program = find_program(spec.program)
+    read = getattr(program, "settings_schema", None)
+    if read is None:
+        return None
+    try:
+        schema = read(spec.calctype)
+    except Exception:  # noqa: BLE001 - no schema to read: count every key
+        return None
+    return schema if isinstance(schema, dict) else None
 
-    @staticmethod
-    def handles(context: TaskContext) -> bool:
-        """Whether this evaluator can compute the task (axtb gradients)."""
-        spec = context.gradient_spec
-        if spec is None or getattr(spec, "program", None) != "axtb":
-            return False
-        hs = context.hessian_spec
-        return hs is None or getattr(hs, "program", None) == "axtb"
 
-    def supports_hessian(self, context: TaskContext) -> bool:
-        """Axtb Hessians are analytic; used when a Hessian subprogram is given."""
-        return context.hessian_spec is not None
+def _node(node: Any, root: dict[str, Any]) -> dict[str, Any]:
+    """A schema node with a local ``$ref`` (or a nullable ``anyOf`` of one) resolved."""
+    if not isinstance(node, dict):
+        return {}
+    for option in node.get("anyOf", ()):
+        if isinstance(option, dict) and option.get("type") != "null":
+            node = {**option, **{k: v for k, v in node.items() if k != "anyOf"}}
+            break
+    ref = node.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/"):
+        target: Any = root
+        for part in ref[2:].split("/"):
+            target = target.get(part, {}) if isinstance(target, dict) else {}
+        node = {**target, **{k: v for k, v in node.items() if k != "$ref"}}
+    return node
 
-    def _settings(self, spec: Any) -> tuple[str, dict[str, Any], dict[str, Any]]:
-        if getattr(spec, "program", None) != "axtb":
-            raise ValueError(
-                f"the axtb evaluator computes axtb specs, not {spec.program!r}"
-            )
-        if spec.model is None or not spec.model.method:
-            raise ValueError("axtb needs model.method, such as gfn2 or gxtb-v2.0.1")
-        method = spec.model.method
-        kw = dict(spec.keywords)
-        unknown = set(kw) - _AXTB_CALCULATOR - _AXTB_HESSIAN
-        if unknown:
-            raise ValueError(
-                f"axtb keywords not supported by qcopt's axtb evaluator: {sorted(unknown)}"
-            )
-        calc_kw = {k: v for k, v in kw.items() if k in _AXTB_CALCULATOR}
-        hess_kw = {
-            k.removeprefix("hessian_"): v for k, v in kw.items() if k in _AXTB_HESSIAN
-        }
-        return method, calc_kw, hess_kw
 
-    def _calculator(self, r: Request, kind: str) -> tuple[Any, dict[str, Any]]:
-        ctx = r.context
-        spec = ctx.hessian_spec if kind == "hessian" else ctx.gradient_spec
-        method, calc_kw, hess_kw = self._settings(spec)
-        same = (
-            kind == "hessian"
-            and ctx.hessian_spec.model == ctx.gradient_spec.model
-            and {
-                k: v
-                for k, v in ctx.hessian_spec.keywords.items()
-                if k in _AXTB_CALCULATOR
-            }
-            == {
-                k: v
-                for k, v in ctx.gradient_spec.keywords.items()
-                if k in _AXTB_CALCULATOR
-            }
-        )
-        key = (r.task, "gradient" if (kind == "gradient" or same) else "hessian")
-        from qcref import periodic_table as pt
-
-        numbers = [int(getattr(pt, s.capitalize()).number) for s in ctx.symbols]
-        setup = (method, numbers, ctx.charge, ctx.multiplicity, calc_kw)
-        cached = self._calcs.get(key)
-        calc = cached[1] if cached is not None and cached[0] == setup else None
-        if calc is None:
-            calc = self._axtb.Calculator(
-                method,
-                numbers,
-                np.asarray(r.positions, dtype=float),
-                charge=float(ctx.charge),
-                uhf=int(ctx.multiplicity) - 1,
-                **calc_kw,
-            )
-            self._calcs[key] = (setup, calc)
-        return calc, hess_kw
-
-    def _run(self, r: Request) -> Answer:
-        x = np.asarray(r.positions, dtype=float)
-        try:
-            calc, hess_kw = self._calculator(r, r.kind)
-            if r.kind == "hessian":
-                res = calc.hessian(x, vibrations=False, **hess_kw)
-                hess = np.asarray(res["hessian"], dtype=float)
-            else:
-                res = calc.singlepoint(x, gradient=True)
-                hess = None
-            return Answer(
-                positions=x,
-                energy=float(res["energy"]),
-                gradient=np.asarray(res["gradient"], dtype=float).reshape(-1, 3),
-                hessian=hess,
-                program="axtb",
-                program_version=self.version,
-                output={"iterations": res.get("iterations")},
-            )
-        except Exception as exc:  # noqa: BLE001 - reported in the answer
-            return Answer(
-                positions=x,
-                success=False,
-                error=f"{type(exc).__name__}: {exc}",
-                error_kind=self._kind(exc),
-                traceback=traceback.format_exc(),
-                program="axtb",
-                program_version=self.version,
-            )
-
-    def _kind(self, exc: Exception) -> str | None:
-        """The kind of axtb's own errors: an SCF that did not converge, bad settings."""
-        if isinstance(exc, self._axtb.ScfNotConvergedError):
-            return "convergence"
-        if isinstance(exc, self._axtb.InputError):
-            return "input"
-        return None  # a bug: internal
-
-    def __call__(self, requests: Sequence[Request]) -> list[Answer]:
-        """Compute the requests; one task's in order, tasks side by side."""
-        each = max(
-            [1]
-            + [
-                int(r.context.gradient_spec.keywords.get("threads", 1))
-                for r in requests
-            ]
-        )
-        granted = self.threads
-        if granted is None:
-            granted = (
-                len(os.sched_getaffinity(0))
-                if hasattr(os, "sched_getaffinity")
-                else os.cpu_count() or 1
-            )
-        return _map_tasks(requests, self._run, max(1, granted // each))
-
-    def forget(self, task: int) -> None:
-        """Drop a finished task's calculators."""
-        for key in [k for k in self._calcs if k[0] == task]:
-            del self._calcs[key]
+def _surface(
+    values: dict[str, Any], schema: dict[str, Any], root: dict[str, Any]
+) -> dict[str, Any]:
+    props = _node(schema, root).get("properties") or {}
+    out: dict[str, Any] = {}
+    for key, value in values.items():
+        if key not in props:  # unknown to the schema: it may define the surface
+            out[key] = value
+            continue
+        node = _node(props[key], root)
+        concern = node.get("x-concern")
+        if concern is not None:
+            if concern in SURFACE_CONCERNS:
+                out[key] = value
+        elif isinstance(value, dict) and "properties" in node:
+            inner = _surface(value, node, root)
+            if inner:
+                out[key] = inner
+        else:
+            out[key] = value
+    return out
 
 
 class RoutingEvaluator:
@@ -350,58 +237,15 @@ def same_spec(a: ProgramSpec, b: ProgramSpec) -> bool:
     return a.model_copy(update={"calctype": b.calctype}) == b
 
 
-def axtb_in_process(context: TaskContext) -> bool:
-    """Whether a task runs on qcopt's own axtb evaluator.
-
-    Only until axtb is a program with sessions: a session over axtb's ``compute`` would
-    make every gradient a separate calculation (30x slower on small molecules), where
-    qcopt's in-process evaluator keeps one warm-started calculator per task.
-    """
-    if not AxtbEvaluator.handles(context):
-        return False
-    program = find_program("axtb")
-    if program is not None and capabilities_of(program).sessions:
-        return False
-    try:
-        import axtb  # noqa: F401
-    except ImportError:
-        return False
-    return True
-
-
-def unseen_axtb(spec: Any) -> str | None:
-    """The axtb version qcopt computes a spec's children with where no runner sees it.
-
-    A runner records the identity of every subprogram it finds as a program. axtb 0.1 is
-    none, so when qcopt runs its axtb children in this process their identity is
-    qcopt's to give (a store must not reuse a result made by another axtb).
-
-    Returns:
-        axtb's version, if a child is axtb, axtb is importable and no program is
-        registered under its name; else None.
-    """
-    if not any(c.program == "axtb" for c in getattr(spec, "subprograms", ())):
-        return None
-    if find_program("axtb") is not None:
-        return None
-    try:
-        return metadata.version("axtb")
-    except metadata.PackageNotFoundError:
-        return None
-
-
 def route(context: TaskContext) -> str:
-    """How a task's gradients are computed: ``axtb``, ``compute`` or ``sessions``.
+    """How a task's gradients are computed: ``compute`` or ``sessions``.
 
-    - ``axtb``: axtb in this process (:func:`axtb_in_process`);
     - ``compute``: a gradient program without sessions that evaluates many inputs at
       once (an ML potential on a GPU): every task's requests of a round in one list
       (:class:`ComputeEvaluator`), which the runner hands it as one batch;
     - ``sessions``: everything else, the program's own sessions (warm-started) or a
       session over its ``compute`` (:class:`SessionEvaluator`).
     """
-    if axtb_in_process(context):
-        return "axtb"
     program = find_program(context.gradient_spec.program)
     if program is not None:
         caps = capabilities_of(program)
@@ -433,7 +277,6 @@ def evaluator(
     if set(routes) == {"sessions"}:
         return sessions
     makers: dict[str, Callable[[], Any]] = {
-        "axtb": lambda: AxtbEvaluator(ctx.threads),
         "compute": lambda: ComputeEvaluator(ctx),
         "sessions": lambda: sessions,
     }

@@ -11,10 +11,9 @@ import qcopt.algorithms.optimization as optimize_module
 from qcopt.algorithms import lockstep
 from qcopt.coordinates import InternalCoordinates, make_coordinates
 from qcopt.driver import Answer
-from qcopt.evaluators import AxtbEvaluator
 from qcopt.geometry import rigid_basis
 
-from .helpers import FunctionEvaluator, find_ts, irc, minimize
+from .helpers import FunctionEvaluator, find_ts, irc, minimize, registered
 from .surfaces import (
     MB_MINIMA,
     MB_SADDLES,
@@ -532,32 +531,6 @@ def test_cartesian_fallback_keeps_the_hessian(monkeypatch):
     assert all(s["lowest"] < 0 for s in out.record["log"])  # the negative mode survived
 
 
-@pytest.mark.skipif(find_spec("axtb") is None, reason="needs axtb")
-def test_a_reused_axtb_evaluator_uses_each_runs_method():
-    water = Structure(
-        symbols=["O", "H", "H"],
-        geometry=[[0.0, 0.0, 0.0], [1.81, 0.0, 0.0], [-0.45, 1.75, 0.0]],
-    )
-    ev = AxtbEvaluator()
-    gfn2 = {"program": "axtb", "model": {"method": "gfn2"}}
-    gxtb = {"program": "axtb", "model": {"method": "gxtb-v2.0.1"}}
-    first = minimize(water, gfn2, evaluator=ev, convergence={"max_iter": 1})
-    again = minimize(water, gxtb, evaluator=ev, convergence={"max_iter": 1})
-    fresh = minimize(
-        water, gxtb, evaluator=AxtbEvaluator(), convergence={"max_iter": 1}
-    )
-    e = [o.results.frames[0].results.energy for o in (first, again, fresh)]
-    assert e[1] == pytest.approx(e[2]) and e[1] != pytest.approx(e[0])
-    xtb = minimize(
-        water,
-        {"program": "xtb", "model": {"method": "gfn2"}},
-        evaluator=ev,
-        convergence={"max_iter": 1},
-    )
-    assert not xtb.success
-    assert "computes axtb specs" in xtb.traceback
-
-
 # ------------------------------------------------- round 2 (review of the fixes)
 
 
@@ -642,7 +615,57 @@ def test_bent_molecules_keep_three_rotations():
         assert coords.name == "dlc", angle
 
 
-def test_hessian_keywords_do_not_make_a_separate_program():
+def test_only_keywords_of_the_surface_make_a_separate_program():
+    # the child's settings schema says which keys define the surface (x-concern
+    # model or approximation); convergence, algorithm and resource keys do not
+    from qccompute.program import FunctionProgram
+    from qcdata import ProgramSpec
+
+    from qcopt.calculation import _separate
+
+    def props(**concerns):
+        return {k: {"type": "number", "x-concern": c} for k, c in concerns.items()}
+
+    schema = {
+        "type": "object",
+        "properties": {
+            **props(field="model", step="approximation", tol="convergence"),
+            "scf": {
+                "type": "object",
+                "properties": props(etemp="model", max_iter="convergence"),
+            },
+        },
+    }
+    program = FunctionProgram(
+        "schema-surface",
+        lambda x, inp: muller_brown(x),
+        takes_input=True,
+        settings=schema,
+    )
+
+    def spec(calctype, **kw):
+        return ProgramSpec(program="schema-surface", calctype=calctype, keywords=kw)
+
+    with registered(program):
+        grad = spec("gradient", field=0.1, tol=1e-6)
+        assert not _separate(grad, spec("hessian", field=0.1, tol=1e-4, threads=4))
+        assert not _separate(grad, spec("hessian", field=0.1, scf={"max_iter": 9}))
+        assert _separate(grad, spec("hessian", field=0.2))
+        assert _separate(grad, spec("hessian", field=0.1, step=0.01))
+        assert _separate(grad, spec("hessian", field=0.1, scf={"etemp": 300.0}))
+    # a program qcopt cannot find: every keyword but threads counts
+    unknown = ProgramSpec(program="nowhere", calctype="gradient", keywords={"a": 1})
+    assert _separate(unknown, unknown.model_copy(update={"keywords": {"a": 2}}))
+    assert not _separate(
+        unknown,
+        unknown.model_copy(
+            update={"calctype": "hessian", "keywords": {"a": 1, "threads": 2}}
+        ),
+    )
+
+
+@pytest.mark.skipif(find_spec("axtb") is None, reason="needs axtb")
+def test_axtb_hessian_settings_do_not_make_a_separate_program():
     from qcdata import ProgramSpec
 
     from qcopt.calculation import _separate
@@ -652,11 +675,13 @@ def test_hessian_keywords_do_not_make_a_separate_program():
             program="axtb", calctype=calctype, model={"method": "gfn2"}, keywords=kw
         )
 
-    grad = spec("gradient", accuracy=0.01)
-    assert not _separate(
-        grad, spec("hessian", accuracy=0.01, hessian_accuracy=1e-4, threads=4)
+    grad = spec("gradient", accuracy_scale=0.01)
+    hess = spec(
+        "hessian", accuracy_scale=0.1, hessian={"accuracy_scale": 0.01}, threads=4
     )
-    assert _separate(grad, spec("hessian", accuracy=0.01, alpb="water"))
+    assert not _separate(grad, hess)
+    water = {"name": "water", "model": "alpb"}
+    assert _separate(grad, spec("hessian", accuracy_scale=0.01, solvent=water))
 
 
 def test_routing_without_contexts_pairs_hessians_conservatively():
