@@ -11,6 +11,8 @@ Python exceptions (``.kind``) and qcdata results (``error.kind``):
   which);
 - ``numerical``: a numerical failure inside qcopt (singular matrices, non-finite
   values);
+- ``stopped``: the caller stopped the run (``runner.stop``); it keeps what it reached;
+- ``timeout``: the run ran out of the caller's time; it keeps what it reached;
 - ``internal``: a bug in qcopt.
 """
 
@@ -19,7 +21,14 @@ from __future__ import annotations
 from typing import Literal
 
 ErrorKind = Literal[
-    "input", "unsupported", "program", "convergence", "numerical", "internal"
+    "input",
+    "unsupported",
+    "program",
+    "convergence",
+    "numerical",
+    "stopped",
+    "timeout",
+    "internal",
 ]
 
 

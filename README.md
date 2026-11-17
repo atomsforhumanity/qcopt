@@ -134,8 +134,9 @@ The output's standard slots, the same in every AFH program:
 - `error`, on failure: `kind` (`input`, `program`: a gradient or Hessian calculation
   failed, with its `program` and its own error as `cause`, and a message that starts
   with the program and calculation type, `axtb (gradient): ...`; `convergence`, with
-  `code` such as `max_iter` or `not_first_order_saddle`; `numerical`; `internal`),
-  `message` and `code`. `traceback` holds the message, then the failed calculation's
+  `code` such as `max_iter` or `not_first_order_saddle`; `numerical`; `stopped`:
+  `qccompute.stop(future)` ended it before its next step; `timeout`: the caller's time
+  ran out; `internal`), `message` and `code`. `traceback` holds the message, then the failed calculation's
   own traceback;
 - `execution.timings`: `subprograms` (in the gradient and Hessian programs), `optimizer`
   (qcopt's own), `total`.

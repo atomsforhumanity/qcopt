@@ -39,6 +39,7 @@ from .common import (
     RunResult,
     child_failed,
     guarded,
+    halted,
     lockstep,
     resolve_initial_hessian,
     with_hessian,
@@ -210,9 +211,10 @@ def irc(
 #: error message uses: ``converged`` (gradient and curvature criteria),
 #: ``converged_flat`` (a flat end, checked with exact Hessians), ``max_iter``,
 #: ``energy_rose`` (even a tiny step passed the valley floor), ``stalled`` (no way
-#: down on the model), ``no_descent`` (no step down from the transition state) and
+#: down on the model), ``no_descent`` (no step down from the transition state),
 #: ``gradient_failed`` (a gradient calculation failed; the branch's ``error`` says
-#: why).
+#: why), and ``stopped`` or ``timeout`` (the run was stopped on request or ran out of
+#: time).
 BRANCH_ENDS = {
     "converged": "converged",
     "converged_flat": "converged (flat)",
@@ -221,6 +223,8 @@ BRANCH_ENDS = {
     "stalled": "stalled",
     "no_descent": "no descent from the transition state",
     "gradient_failed": "gradient failed",
+    "stopped": "stopped",
+    "timeout": "out of time",
 }
 
 
@@ -238,7 +242,7 @@ class _Branch:
     frames: list[Answer] = field(default_factory=list)
     done: bool = False
     reason: str | None = None  # how it ended: a key of BRANCH_ENDS
-    error: str | None = None  # for gradient_failed: the calculation's error
+    error: str | None = None  # for a failed or stopped calculation: its error
     steps: int = 0
     since_hessian: int = 0
     need_hessian: bool = False  # the next ask is the last point again, for its Hessian
@@ -261,9 +265,9 @@ class _Branch:
         return self.reason in ("converged", "converged_flat")
 
     @property
-    def gradient_failed(self) -> bool:
-        """Whether a gradient calculation stopped it."""
-        return self.reason == "gradient_failed"
+    def cut(self) -> bool:
+        """Whether a calculation cut it short: it failed, or the run ended."""
+        return self.reason in ("gradient_failed", "stopped", "timeout")
 
     def why(self) -> str:
         """How it ended, in words (``gradient failed: <error>``)."""
@@ -407,16 +411,17 @@ class _IRC:
             self._take_end_hessian(b, ans)
             return
         if not ans.success:
-            if b.asked_hessian and not b.skip_hessian:
+            end = halted(ans)
+            if b.asked_hessian and not b.skip_hessian and end is None:
                 # An optional Hessian failed: ask for the point's gradient alone,
                 # and continue the branch on updated Hessians.
                 b.hessian_failures += 1
                 b.skip_hessian = True
                 b.end_checks = MAX_END_CHECKS
                 return
-            b.steps += 1
+            b.steps += 0 if end else 1  # a halted ask computed nothing
             b.failure = ans
-            b.finish("gradient_failed", str(ans.error))
+            b.finish(end or "gradient_failed", str(ans.error))
             return
         b.steps += 1
         g_new = np.asarray(ans.gradient, dtype=float).ravel()
@@ -592,7 +597,7 @@ class _IRC:
                 report=self.report,
             )
             for b in self.branches
-            if b.frames and not b.gradient_failed
+            if b.frames and not b.cut
         }
         results = yield from lockstep(subs)  # type: ignore[arg-type]
         ends: dict[str, dict[str, Any]] = {}
@@ -627,7 +632,7 @@ class _IRC:
         """The path, whether every branch reached its end, and why not."""
         opts = self.opts
         frames, ts_index = self._assemble()
-        failed = [b for b in self.branches if b.gradient_failed]
+        failed = [b for b in self.branches if b.cut]
         unfinished: list[str] = []
         for b in self.branches:
             # "energy rose": even a sixteenth of a step passed the valley floor, so

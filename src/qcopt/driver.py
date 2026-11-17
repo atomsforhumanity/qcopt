@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time
 import traceback
-from collections.abc import Generator, Hashable, Sequence
+from collections.abc import Callable, Generator, Hashable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Protocol
 
@@ -54,7 +54,8 @@ class Answer:
         error: Why it failed, in one line: the program's own message.
         error_kind: The failure's kind when the evaluator or the driver knows it and
             the output does not carry the program's own error (``numerical`` for a
-            non-finite result); None: ``internal``.
+            non-finite result; ``stopped`` or ``timeout`` for an ask the driver never
+            computed because the run ended first); None: ``internal``.
         calctype: For a failure, the calculation that failed (``gradient`` or
             ``hessian``): a Hessian paired with a separate program's gradient fails
             in either.
@@ -453,6 +454,14 @@ def _evaluate(
     return answers, crashed
 
 
+def _halted(rnd: _Round, kind: str, message: str) -> list[Answer]:
+    """The round's answers when the run ends before it: every request failed, uncomputed."""
+    return [
+        Answer(positions=r.positions, success=False, error=message, error_kind=kind)
+        for r in rnd.requests
+    ]
+
+
 def _start(alg: Algorithm) -> tuple[list[Ask] | None, Any]:
     """Prime an algorithm: its first asks, or (None, its result)."""
     try:
@@ -480,6 +489,8 @@ def drive(
     *,
     timings: dict[str, float] | None = None,
     finished: list[float] | None = None,
+    halt: Callable[[], tuple[str, str] | None] | None = None,
+    halted: list[str | None] | None = None,
 ) -> list[Any]:
     """Run algorithms to completion, computing each round's asks in one call.
 
@@ -491,6 +502,12 @@ def drive(
             the evaluator.
         finished: If given (one entry per algorithm), each entry becomes the
             ``time.perf_counter()`` at which its algorithm finished.
+        halt: Asked before each round: None to go on, else the kind (``stopped``,
+            ``timeout``) and message that end the run. Nothing of that round is
+            computed: every ask fails with that kind, and each algorithm ends as on a
+            failed calculation, keeping its frames.
+        halted: If given (one entry per algorithm), each entry becomes the halt's kind
+            for the algorithms that were still running when it came, else stays.
 
     Returns:
         Each algorithm's return value, in order. An algorithm that raises has the
@@ -512,7 +529,14 @@ def drive(
         rnd = _Round()
         for i, asks in pending.items():
             rnd.plans[i] = [strategy.plan(rnd, i, ask, recent[i]) for ask in asks]
-        answers, crashed = _evaluate(evaluator, rnd, timings)
+        why = None if halt is None else halt()
+        if why is not None:
+            answers, crashed = _halted(rnd, *why), True
+            if halted is not None:
+                for i in rnd.plans:
+                    halted[i] = halted[i] or why[0]
+        else:
+            answers, crashed = _evaluate(evaluator, rnd, timings)
         nxt: dict[int, list[Ask]] = {}
         for i, plans in rnd.plans.items():
             replies = [plan.reply(answers, recent[i]) for plan in plans]

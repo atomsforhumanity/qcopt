@@ -47,6 +47,7 @@ from .common import (
     Report,
     RunResult,
     guarded,
+    halted,
     program_failed,
     resolve_initial_hessian,
     with_hessian,
@@ -387,7 +388,11 @@ class _Optimization:
         (b,) = self.count((yield [Ask("gradient", x_new, self.lineage)]))
         if not b.success:
             self.failures += 1
-            if self.failures > MAX_GRADIENT_FAILURES or self.trust <= opts.trust.min:
+            if (
+                self.failures > MAX_GRADIENT_FAILURES
+                or self.trust <= opts.trust.min
+                or halted(b)
+            ):
                 where = f"at step {self.iterations}"
                 return program_failed(self.frames + [b], b, where, self.info)
             self.trust = max(opts.trust.min, 0.25 * min(self.trust, coords.size(d)))

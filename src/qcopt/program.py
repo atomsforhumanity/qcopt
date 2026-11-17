@@ -16,7 +16,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from qccompute.program import (
@@ -252,10 +252,29 @@ class QcoptProgram:
         tasks = [k for k, out in enumerate(outputs) if out is None]
         progress = getattr(ctx, "progress", None)
         try:
-            done = iter(run(prepared, ev, ctx.threads, progress, tasks))
+            done = iter(run(prepared, ev, ctx.threads, progress, tasks, _halt(ctx)))
         finally:
             ev.close()
         return [out if out is not None else next(done) for out in outputs]
+
+
+def _halt(ctx: RunContext) -> Callable[[], tuple[str, str] | None]:
+    """Whether the run must end before its next round, and why (``stopped``, ``timeout``).
+
+    The caller's stop (``runner.stop``, seen as ``ctx.stop_requested()``) and the
+    caller's time limit (``ctx.timeout``), checked before each round of gradients.
+    """
+    stop = getattr(ctx, "stop_requested", None)
+
+    def halt() -> tuple[str, str] | None:
+        if stop is not None and stop():
+            return "stopped", "stopped on request"
+        left = getattr(ctx, "timeout", None)
+        if left is not None and left <= 0:
+            return "timeout", "out of time"
+        return None
+
+    return halt
 
 
 def _input_failure(

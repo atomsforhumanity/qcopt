@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
+from qcdata import ErrorInfo
 
 from ..driver import Algorithm, Answer, Ask
 from ..errors import ErrorKind
@@ -107,12 +108,35 @@ def guarded(body: Callable[[Progress], Algorithm]) -> Algorithm:
         )
 
 
+#: How a run ends without a fault: the caller stopped it, or its time ran out.
+HALTS = ("stopped", "timeout")
+
+
+def halted(answer: Answer | None) -> str | None:
+    """``stopped`` or ``timeout`` when a calculation failed because the run ended.
+
+    Either the driver never computed it (the run had ended), or the program stopped on
+    the request itself or ran out of time. None for any other answer.
+    """
+    if answer is None or answer.success:
+        return None
+    if answer.error_kind in HALTS:
+        return answer.error_kind
+    out = answer.output
+    error = out if isinstance(out, ErrorInfo) else getattr(out, "error", None)
+    kind = getattr(error, "kind", None)
+    return str(kind) if kind in HALTS else None
+
+
 def child_failed(answer: Answer, where: str) -> str:
     """A failed gradient or Hessian calculation, as AFH's drivers report a child's.
 
     The program and calculation type first (``linus (gradient): ...``), then the
-    program's own message, then where in the run it happened.
+    program's own message, then where in the run it happened. An ask the driver never
+    computed, because the run had ended, is the reason alone (``stopped on request``).
     """
+    if answer.program is None and answer.error_kind in HALTS:
+        return f"{answer.error} ({where})"
     program = answer.program or "the evaluator"
     calctype = answer.calctype or "calculation"
     return f"{program} ({calctype}): {str(answer.error).rstrip('.')} ({where})"

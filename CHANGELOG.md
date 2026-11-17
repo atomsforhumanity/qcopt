@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+### Added
+
+- **A stop or a timeout ends a run at its next step** with what it reached: a failure
+  of kind `stopped` (`qccompute.stop(future)`, which qcopt sees as
+  `ctx.stop_requested()`) or `timeout` (the caller's `timeout` ran out), keeping its
+  frames. qcopt checks before each round of gradients and computes nothing after it.
+  A gradient or Hessian program that stopped or ran out of time ends the run with
+  the same kind (its error is the `cause`). An IRC branch ended this way says so
+  (`record["branches"][name]["end"]`: `stopped` or `timeout`). Until now a stopped
+  qcopt run went on to its end, and one out of time failed on its next gradient with
+  kind `program`.
+
 ## [0.3.0a8] - 2026-11-17
 
 ### Fixed

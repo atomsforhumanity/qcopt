@@ -77,7 +77,7 @@ from qcdata import (
 from qcref import periodic_table as pt
 
 from . import algorithms
-from .algorithms.common import RunResult, resolve_initial_hessian
+from .algorithms.common import HALTS, RunResult, halted, resolve_initial_hessian
 from .constraints import ConstraintSet
 from .driver import Answer, Evaluator, TaskContext, drive
 from .errors import InputError, UnsupportedError
@@ -442,8 +442,8 @@ def _cause(answer: Answer | None) -> tuple[str | None, ErrorInfo | None]:
     answer (an exception in the evaluator is ``internal``, as qccompute treats a
     program's bug), so callers can always follow ``cause``.
     """
-    if answer is None:
-        return None, None
+    if answer is None or (answer.program is None and answer.error_kind in HALTS):
+        return None, None  # never computed: the run had ended
     out = answer.output
     child = out if isinstance(out, ErrorInfo) else getattr(out, "error", None)
     if not isinstance(child, ErrorInfo):
@@ -459,6 +459,7 @@ def _output(
     timings: dict[str, float],
     threads: int | None = None,
     wall_time: float | None = None,
+    end: str | None = None,
 ) -> ProgramOutput[ProgramInput, Any]:
     inp = p.inp
     s = inp.require_structure()
@@ -529,10 +530,14 @@ def _output(
     error = None
     if result.error is not None:
         program, cause = _cause(result.cause)
+        kind = result.error_kind or "internal"
+        # A run that ended because it was stopped or ran out of time fails with that
+        # kind, whichever calculation it was waiting for (its own or a child's).
+        end = end or (halted(result.cause) if kind == "program" else None)
         error = ErrorInfo(
-            kind=result.error_kind or "internal",
+            kind=end or kind,
             message=result.error,
-            code=result.reason,
+            code=None if end else result.reason,
             program=program,
             cause=cause,
         )
@@ -556,6 +561,7 @@ def run(
     threads: int | None = None,
     progress: Callable[[dict[str, Any]], None] | None = None,
     tasks: Sequence[int] | None = None,
+    halt: Callable[[], tuple[str, str] | None] | None = None,
 ) -> list[ProgramOutput[ProgramInput, Any]]:
     """Run checked calculations in lockstep on one evaluator.
 
@@ -570,6 +576,9 @@ def run(
         progress: Receives each step's event (see the module docstring); None:
             nobody listens, and no event is built.
         tasks: Each calculation's ``task`` in its events (default: its position).
+        halt: Asked before each round of gradients and Hessians: None to go on, else
+            the kind (``stopped``, ``timeout``) and message that end the run there.
+            Calculations still running fail with that kind and keep their frames.
 
     Returns:
         One output per calculation, in order. One that fails or does not converge has
@@ -584,11 +593,20 @@ def run(
     timings: dict[str, float] = {"subprograms": 0.0}
     t0 = time.perf_counter()
     finished = [t0] * len(prepared)
-    results = drive(algs, contexts, evaluator, timings=timings, finished=finished)
+    ends: list[str | None] = [None] * len(prepared)
+    results = drive(
+        algs,
+        contexts,
+        evaluator,
+        timings=timings,
+        finished=finished,
+        halt=halt,
+        halted=ends,
+    )
     timings["total"] = time.perf_counter() - t0
     timings["optimizer"] = timings["total"] - timings["subprograms"]
     share = None if threads is None else max(1, threads // max(1, len(prepared)))
     return [
-        _output(p, res, timings, share, end - t0)
-        for p, res, end in zip(prepared, results, finished, strict=True)
+        _output(p, res, timings, share, at - t0, end)
+        for p, res, at, end in zip(prepared, results, finished, ends, strict=True)
     ]

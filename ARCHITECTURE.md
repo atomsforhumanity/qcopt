@@ -59,7 +59,10 @@ which passes one. qcopt has no route of its own to programs.
 2. **Run** (`driver.drive`): prime every algorithm; each round, plan every ask, call the
    evaluator once, check the answers (finite energies, gradients, Hessians), and send each
    algorithm its replies. Answers carry what they cost (`n_gradients`, `n_hessians`), so
-   counts are right even for finite differences and reused gradients.
+   counts are right even for finite differences and reused gradients. Before each round
+   it asks `halt` (the runner's `ctx.stop_requested()` and `ctx.timeout`): when the run
+   must end, nothing of the round is computed, every ask fails with kind `stopped` or
+   `timeout`, and each algorithm ends as on a failed calculation, keeping its frames.
 3. **Algorithm** (`algorithms.optimization`): one class per run whose `run()` generator
    is short: start, iterate until the convergence criteria are met, verify the
    stationary point (a transition state needs exactly one negative curvature; a minimum
