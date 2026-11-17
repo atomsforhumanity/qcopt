@@ -110,3 +110,12 @@ def test_gxtb_ts_from_gfn2_hessians():
     h = check.hessian(ts.results.final_structure.geometry, vibrations=False)["hessian"]
     f = frequencies(np.asarray(h), ["C", "N", "H"], ts.results.final_structure.geometry)
     assert f.n_imaginary(10.0) == 1
+
+
+def test_an_scf_that_does_not_converge_is_the_child_s_convergence_failure():
+    spec = {**GFN2, "keywords": {"max_iter": 2}}  # two SCF iterations
+    out = minimize(WATER, spec)
+    assert not out.success
+    assert (out.error.kind, out.error.program) == ("program", "axtb")
+    assert out.error.cause.kind == "convergence"
+    assert "ScfNotConvergedError" in out.error.cause.message

@@ -237,10 +237,19 @@ class AxtbEvaluator:
                 positions=x,
                 success=False,
                 error=f"{type(exc).__name__}: {exc}",
+                error_kind=self._kind(exc),
                 traceback=traceback.format_exc(),
                 program="axtb",
                 program_version=self.version,
             )
+
+    def _kind(self, exc: Exception) -> str | None:
+        """The kind of axtb's own errors: an SCF that did not converge, bad settings."""
+        if isinstance(exc, self._axtb.ScfNotConvergedError):
+            return "convergence"
+        if isinstance(exc, self._axtb.InputError):
+            return "input"
+        return None  # a bug: internal
 
     def __call__(self, requests: Sequence[Request]) -> list[Answer]:
         """Compute the requests; one task's in order, tasks side by side."""
