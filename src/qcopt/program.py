@@ -216,8 +216,10 @@ class QcoptProgram:
         if not prepared:
             return [out for out in outputs if out is not None]
         ev = evaluator([p.context for p in prepared], ctx)
+        tasks = [k for k, out in enumerate(outputs) if out is None]
+        progress = getattr(ctx, "progress", None)
         try:
-            done = iter(run(prepared, ev, ctx.threads))
+            done = iter(run(prepared, ev, ctx.threads, progress, tasks))
         finally:
             ev.close()
         return [out if out is not None else next(done) for out in outputs]

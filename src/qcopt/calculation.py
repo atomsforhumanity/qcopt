@@ -16,15 +16,33 @@ there, and qcdata's standard slots:
 - ``resolved``: ``settings``, the settings with every ``auto`` replaced (a valid
   ``keywords`` that reproduces the run), and ``reasons``, why each was chosen;
 - ``record``: what happened (counts, rebuilds, rejected steps, IRC branch ends, the
-  step log);
+  step log), and ``hessian_frames``, the frames at which a Hessian was computed (a
+  given Hessian is none of them: ``resolved`` says ``hessian.initial: given``);
 - ``error``, on failure: ``kind`` (:mod:`qcopt.errors`), ``message``, ``code`` (such
   as ``max_iter``), and for a failed gradient or Hessian calculation its ``program``
   and its own error (``cause``);
 - ``execution.timings``: ``subprograms`` (seconds in the gradient and Hessian
   programs), ``optimizer`` (qcopt's own), ``total``. Calculations run together as a
   list advance in lockstep, so each one's timings are the list's;
+- ``execution.wall_time``: from the start of the list until this calculation
+  finished;
 - ``execution.threads``: the threads this calculation ran with: the most its
   children recorded, else its share of the threads granted to the list.
+
+While it runs, a calculation reports each step to the caller's ``progress`` callable
+(``ctx.progress``; qccompute adds ``path``)::
+
+    {"event": "step", "task": 0, "calctype": "optimization", "step": 3,
+     "energy": -40.512, "g_max": 0.0021}
+
+``task`` is the calculation's position among those run together (its index in
+``compute_batch``'s inputs; 0 alone); ``calctype`` is the search that took the step
+(an IRC's end minimizations report ``optimization``); ``line``, only in an IRC, is
+the branch (``forward`` or ``reverse``); ``step`` counts the frames on that line from
+0 (the start; for an IRC, the transition state); ``energy`` is in Hartree and
+``g_max``, the largest atomic gradient norm (free of constraints and frozen atoms,
+as ``convergence.g_tol`` measures it), in Hartree/bohr. Steps that were rejected or
+failed are not reported.
 """
 
 from __future__ import annotations
@@ -32,7 +50,7 @@ from __future__ import annotations
 import socket
 import time
 import traceback
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from importlib import metadata
 from typing import Any
@@ -328,7 +346,9 @@ def prepare(inp: ProgramInput) -> Prepared:
     )
 
 
-def _algorithm(p: Prepared) -> algorithms.common.Algorithm:
+def _algorithm(
+    p: Prepared, report: algorithms.common.Report | None = None
+) -> algorithms.common.Algorithm:
     s = p.inp.require_structure()
     has_h = p.context.hessian_spec is not None
     if isinstance(p.options, IRCOptions):
@@ -339,6 +359,7 @@ def _algorithm(p: Prepared) -> algorithms.common.Algorithm:
             has_hessian_program=has_h,
             own_hessian=p.own_hessian,
             given_hessian=p.given_hessian,
+            report=report,
         )
     numbers = [int(getattr(pt, sym.capitalize()).number) for sym in s.symbols]
     return algorithms.optimize(
@@ -349,7 +370,21 @@ def _algorithm(p: Prepared) -> algorithms.common.Algorithm:
         has_hessian_program=has_h,
         own_hessian=p.own_hessian,
         given_hessian=p.given_hessian,
+        report=report,
     )
+
+
+def _reporter(
+    progress: Callable[[dict[str, Any]], None] | None, task: int
+) -> algorithms.common.Report | None:
+    """What reports one calculation's steps to ``progress``; None if nobody listens."""
+    if progress is None:
+        return None
+
+    def report(event: dict[str, Any]) -> None:
+        progress({"event": "step", "task": task, **event})
+
+    return report
 
 
 def _frame(a: Answer, structure: Structure, keep_hessian: bool = True) -> Frame:
@@ -423,12 +458,13 @@ def _output(
     result: RunResult | BaseException,
     timings: dict[str, float],
     threads: int | None = None,
+    wall_time: float | None = None,
 ) -> ProgramOutput[ProgramInput, Any]:
     inp = p.inp
     s = inp.require_structure()
     prov = Provenance(program=PROGRAM, program_version=_version())
     execution = ExecutionInfo(
-        wall_time=timings["total"],
+        wall_time=timings["total"] if wall_time is None else wall_time,
         hostname=socket.gethostname(),
         timings=timings,
         threads=threads,
@@ -458,6 +494,11 @@ def _output(
         common["execution"] = execution.model_copy(update={"threads": max(used)})
     record = dict(result.info)
     record["converged"] = result.converged
+    # an Answer holds a Hessian only where one was computed (exact or by finite
+    # differences); the frames drop it when it is a separate program's
+    record["hessian_frames"] = [
+        k for k, a in enumerate(result.frames) if a.hessian is not None
+    ]
     extras: dict[str, Any] = {}
     if result.frequencies is not None:
         f = result.frequencies
@@ -510,7 +551,11 @@ def _output(
 
 
 def run(
-    prepared: Sequence[Prepared], evaluator: Evaluator, threads: int | None = None
+    prepared: Sequence[Prepared],
+    evaluator: Evaluator,
+    threads: int | None = None,
+    progress: Callable[[dict[str, Any]], None] | None = None,
+    tasks: Sequence[int] | None = None,
 ) -> list[ProgramOutput[ProgramInput, Any]]:
     """Run checked calculations in lockstep on one evaluator.
 
@@ -522,20 +567,28 @@ def run(
         evaluator: What computes their gradients and Hessians.
         threads: The threads granted, shared by their subprograms. Each output's
             ``execution.threads`` is what its own children recorded, else its share.
+        progress: Receives each step's event (see the module docstring); None:
+            nobody listens, and no event is built.
+        tasks: Each calculation's ``task`` in its events (default: its position).
 
     Returns:
         One output per calculation, in order. One that fails or does not converge has
         ``success=False``, keeps its frames, and says why in its typed ``error``.
     """
     contexts = [p.context for p in prepared]
-    algs = [_algorithm(p) for p in prepared]
+    ids = range(len(prepared)) if tasks is None else tasks
+    algs = [
+        _algorithm(p, _reporter(progress, k))
+        for p, k in zip(prepared, ids, strict=True)
+    ]
     timings: dict[str, float] = {"subprograms": 0.0}
     t0 = time.perf_counter()
-    results = drive(algs, contexts, evaluator, timings=timings)
+    finished = [t0] * len(prepared)
+    results = drive(algs, contexts, evaluator, timings=timings, finished=finished)
     timings["total"] = time.perf_counter() - t0
     timings["optimizer"] = timings["total"] - timings["subprograms"]
     share = None if threads is None else max(1, threads // max(1, len(prepared)))
     return [
-        _output(p, res, timings, share)
-        for p, res in zip(prepared, results, strict=True)
+        _output(p, res, timings, share, end - t0)
+        for p, res, end in zip(prepared, results, finished, strict=True)
     ]

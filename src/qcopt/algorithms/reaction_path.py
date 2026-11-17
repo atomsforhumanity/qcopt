@@ -35,6 +35,7 @@ from ..space import LOCKED_CURVATURE, CartesianSpace
 from .common import (
     Counter,
     Progress,
+    Report,
     RunResult,
     child_failed,
     guarded,
@@ -162,6 +163,7 @@ def irc(
     has_hessian_program: bool,
     own_hessian: bool = True,
     given_hessian: Array | None = None,
+    report: Report | None = None,
 ) -> Algorithm:
     """Follow the IRC down both sides of a transition state.
 
@@ -181,6 +183,12 @@ def irc(
         given_hessian: A Hessian already known at the transition state (the input's
             ``ProgramInput.given``), used instead of computing one there (with
             ``hessian.initial`` ``auto`` or ``given``); only the gradient is computed.
+        report: Called with each point's event: ``calctype`` ``irc``, ``line``
+            (``forward`` or ``reverse``; none for the transition state), ``step``
+            (the point's number on its line; 0 for the transition state),
+            ``energy`` (Hartree) and ``g_max`` (the largest atomic gradient norm,
+            Hartree/bohr). The end minimizations report as
+            :func:`~qcopt.algorithms.optimize` does, with their branch as ``line``.
     """
     return (
         yield from guarded(
@@ -191,6 +199,7 @@ def irc(
                 has_hessian_program=has_hessian_program,
                 own_hessian=own_hessian,
                 given_hessian=given_hessian,
+                report=report,
                 progress=progress,
             ).run()
         )
@@ -251,6 +260,7 @@ class _IRC:
         own_hessian: bool,
         given_hessian: Array | None = None,
         progress: Progress,
+        report: Report | None = None,
     ) -> None:
         """Set up the mass-weighted space; nothing is computed."""
         self.opts = options
@@ -267,6 +277,7 @@ class _IRC:
         self.has_hessian_program = has_hessian_program
         self.own = own_hessian
         self.progress = progress
+        self.report = report
         self.count = progress.count = Counter()
         n = self.n = len(symbols)
         self.m3 = np.repeat(masses(symbols), 3)
@@ -294,6 +305,7 @@ class _IRC:
                 ts_index=0,
                 cause=ts,
             )
+        self._report(None, 0, ts)
         h0 = np.asarray(ts.hessian if given is None else given, dtype=float)
         self.space.at(self.x0)
         vals, vecs = self.space.eigh(self.space.hessian_to_space(h0))
@@ -398,6 +410,7 @@ class _IRC:
             b.h = self.update(b.h, dx, y)
             b.since_hessian += 1
         b.frames.append(ans)
+        self._report(b.name, len(b.frames), ans)
         de_last = abs(float(ans.energy) - float(b.prev.energy))
         b.last_de = de_last
         step_mw = float(np.sqrt((self.m3 * dx * dx).sum()))
@@ -411,6 +424,19 @@ class _IRC:
             return
         b.ds = min(opts.irc.step, 2.0 * b.ds)
         b.next = self._next_point(b)
+
+    def _report(self, line: str | None, step: int, ans: Answer) -> None:
+        """Report a point of the path (``report``), if anyone listens."""
+        if self.report is None:
+            return
+        event: dict[str, Any] = {"calctype": "irc"}
+        if line is not None:
+            event["line"] = line
+        g = np.asarray(ans.gradient, dtype=float).ravel() * self.space.free
+        event.update(
+            step=step, energy=float(ans.energy), g_max=float(max_atomic_norm(g))
+        )
+        self.report(event)
 
     def _take_end_hessian(self, b: _Branch, ans: Answer) -> None:
         """The last point again, for its exact Hessian: no step was taken."""
@@ -524,6 +550,7 @@ class _IRC:
                 start=(b.prev, b.h),
                 own_hessian=self.own,
                 lineage=b.name,
+                report=self.report,
             )
             for b in self.branches
             if b.frames and not b.gradient_failed

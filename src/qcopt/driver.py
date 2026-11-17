@@ -479,6 +479,7 @@ def drive(
     evaluator: Evaluator,
     *,
     timings: dict[str, float] | None = None,
+    finished: list[float] | None = None,
 ) -> list[Any]:
     """Run algorithms to completion, computing each round's asks in one call.
 
@@ -488,6 +489,8 @@ def drive(
         evaluator: Computes the requests.
         timings: If given, ``timings["subprograms"]`` accumulates the seconds spent in
             the evaluator.
+        finished: If given (one entry per algorithm), each entry becomes the
+            ``time.perf_counter()`` at which its algorithm finished.
 
     Returns:
         Each algorithm's return value, in order. An algorithm that raises has the
@@ -499,6 +502,8 @@ def drive(
         asks, results[i] = _start(alg)
         if asks is not None:
             pending[i] = asks
+        elif finished is not None:
+            finished[i] = time.perf_counter()
     strategy = _Strategy(evaluator, contexts)
     # Each task's latest gradient answers by geometry, so a Hessian from a separate
     # program at a point just computed does not compute its gradient again.
@@ -517,6 +522,8 @@ def drive(
             if asks is not None:
                 nxt[i] = asks
             else:
+                if finished is not None:
+                    finished[i] = time.perf_counter()
                 _forget(evaluator, i)
         pending = nxt
     return results

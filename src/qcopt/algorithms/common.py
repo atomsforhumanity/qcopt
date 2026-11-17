@@ -14,6 +14,10 @@ from ..errors import ErrorKind
 from ..geometry import Array
 from ..vibrations import Frequencies
 
+#: Receives an algorithm's step events while it runs (small JSON objects; see
+#: :func:`qcopt.calculation.run`).
+Report = Callable[[dict[str, Any]], None]
+
 
 @dataclass
 class RunResult:

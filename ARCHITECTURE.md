@@ -67,11 +67,15 @@ which passes one. qcopt has no route of its own to programs.
    Each phase is a method that yields what it needs. The IRC (`reaction_path`) is the
    same shape: branches advance together, each a `_Branch` with its own step length,
    Hessian and end test; the ends are minimized by the minimization algorithm, run in
-   lockstep.
+   lockstep. When the caller listens (`ctx.progress`), each algorithm reports every
+   frame it keeps as a step event through its `report` callable (the shape is in
+   `calculation`'s docstring); nothing is built otherwise, and a step event never
+   changes the algorithm's state.
 4. **Output** (`calculation._output`): frames from the answers; `resolved` (the settings with
    every `auto` replaced, which reproduce the run), `record` (counts, rebuilds, branch
-   ends, the step log), `error` (kind, code, the failed child's own error) on failure,
-   and `execution.timings`. `compute` raises a failed output as `ProgramError`, which
+   ends, the step log, the frames where Hessians were computed), `error` (kind, code,
+   the failed child's own error) on failure, and `execution` (the list's timings, this
+   calculation's own wall time and threads). `compute` raises a failed output as `ProgramError`, which
    carries it as `output`; `compute_batch` returns failures in place.
 
 ## Where to extend it

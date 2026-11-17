@@ -44,6 +44,7 @@ from ..vibrations import frequencies
 from .common import (
     Counter,
     Progress,
+    Report,
     RunResult,
     guarded,
     program_failed,
@@ -89,6 +90,7 @@ def optimize(
     given_hessian: Array | None = None,
     own_hessian: bool = True,
     lineage: Hashable | None = None,
+    report: Report | None = None,
 ) -> Algorithm:
     """Minimize (``OptimizationOptions``) or find a first-order saddle point.
 
@@ -114,6 +116,11 @@ def optimize(
         lineage: The lineage of every calculation it asks for (see
             :class:`~qcopt.driver.Ask`), such as the IRC branch an end minimization
             continues.
+        report: Called once per frame with the step's event: ``calctype``
+            (``optimization`` or ``transition_state``), ``line`` (the lineage, if
+            any), ``step`` (the frame's index), ``energy`` (Hartree) and ``g_max``
+            (the largest atomic norm of the free gradient, Hartree/bohr, as
+            ``convergence.g_tol`` measures it).
     """
     return (
         yield from guarded(
@@ -127,6 +134,7 @@ def optimize(
                 given_hessian=given_hessian,
                 own_hessian=own_hessian,
                 lineage=lineage,
+                report=report,
                 progress=progress,
             ).run()
         )
@@ -171,6 +179,7 @@ class _Optimization:
         own_hessian: bool,
         lineage: Hashable | None,
         progress: Progress,
+        report: Report | None = None,
     ) -> None:
         """Set up coordinates, constraints and bookkeeping; nothing is computed."""
         opts = self.opts = options
@@ -180,6 +189,8 @@ class _Optimization:
         self.start = start
         self.own = own_hessian  # exact Hessians are the gradient method's own
         self.lineage = lineage
+        self.report = report
+        self.reported = 0  # frames reported so far
         self.count = progress.count = Counter()
         n = self.n = len(symbols)
         frozen = opts.constraints.frozen
@@ -316,12 +327,27 @@ class _Optimization:
     def _at_stationary_point(self) -> bool:
         """Whether the convergence criteria (and the constraints) are met."""
         free = self._free(self.a.gradient, self.x)
+        if self.report is not None and len(self.frames) > self.reported:
+            self._report(free)
         if not converged(self.opts.convergence, free, self.last_step, self.last_de):
             return False
         if self.cons is None:
             return True
         tol = self.opts.constraints.tol
         return bool(np.abs(self.cons.violation(self.x)).max() < tol)
+
+    def _report(self, free: Array) -> None:
+        """Report the latest frame, whose free gradient is ``free``, as a step."""
+        self.reported = len(self.frames)
+        event: dict[str, Any] = {
+            "calctype": "transition_state" if self.ts else "optimization"
+        }
+        if self.lineage is not None:
+            event["line"] = str(self.lineage)
+        event["step"] = len(self.frames) - 1
+        event["energy"] = float(self.a.energy)
+        event["g_max"] = float(max_atomic_norm(free))
+        self.report(event)  # type: ignore[misc]
 
     def _iterate(self) -> Algorithm:
         """One step: decompose, step, compute, judge, update; a failed result or None."""

@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+### Added
+
+- **Progress events** (the stack's decision 14a): with a `progress=` callable on
+  `qccompute.compute`, `submit` or `session`, each calculation reports every frame it
+  keeps as `{"event": "step", "task": 0, "calctype": "optimization", "step": 3,
+  "energy": ..., "g_max": ...}`. `task` is its position among the calculations run
+  together; an IRC adds `line` (`forward` or `reverse`) and its end minimizations
+  report as `optimization` steps on their branch's line. Nothing is built when nobody
+  listens, and listening changes no number.
+- **Each output's own `execution.wall_time`** (#60): from the start of the list to
+  when that calculation finished. It was the whole list's; the runner keeps that as
+  `timings["batch"]`.
+- **`record["hessian_frames"]`**: the frames at which a Hessian was computed (exact or
+  by finite differences). A given Hessian is none of them: `resolved` says
+  `hessian.initial: given`. With Hessians from a separate program the frames don't
+  keep them, so this was the only way to tell where they were computed.
+
 ## [0.3.0a4] - 2026-11-17
 
 ### Changed
