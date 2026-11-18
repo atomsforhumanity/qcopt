@@ -40,14 +40,42 @@ CoordinateSystem = Literal["auto", "tric", "dlc", "cartesian"]
 HessianUpdate = Literal["bfgs", "bofill", "ts_bfgs", "sr1", "psb"]
 
 
+#: What a setting is about (qcdata's conventions, ``x-concern`` on every key):
+#: ``model`` (what is computed: constraints), ``convergence`` (when it stops),
+#: ``algorithm`` (how it gets there), ``resource`` (threads).
+Concern = Literal[
+    "model", "approximation", "convergence", "algorithm", "resource", "output"
+]
+
+#: Settings that mean the same in AFH's programs (qcdata's conventions, "Shared names").
+SHARED = {
+    "threads",
+    "convergence.max_iter",
+    "convergence.g_tol",
+    "convergence.e_tol",
+    "convergence.d_tol",
+    "freq.imaginary_cutoff",
+}
+
+
 def _f(
-    default: Any, *, unit: str | None = None, tier: str = "common", **kw: Any
+    default: Any,
+    *,
+    unit: str | None = None,
+    tier: str = "common",
+    concern: Concern = "algorithm",
+    **kw: Any,
 ) -> Any:
-    """A field with its unit and tier (common or expert) in the JSON Schema."""
-    extra: dict[str, Any] = {"tier": tier}
+    """A field with its tier (common or expert), concern and unit in the JSON Schema."""
+    extra: dict[str, Any] = {"x-tier": tier, "x-concern": concern}
     if unit is not None:
-        extra["unit"] = unit
+        extra["x-unit"] = unit
     return Field(default=default, json_schema_extra=extra, **kw)
+
+
+def _c(default: Any, **kw: Any) -> Any:
+    """A convergence criterion's field."""
+    return _f(default, concern="convergence", **kw)
 
 
 class _Settings(BaseModel):
@@ -77,11 +105,11 @@ class ConvergenceSettings(_Settings):
         e_tol: Energy change of the last step (Hartree).
     """
 
-    max_iter: int = _f(500, ge=1)
-    g_tol: float = _f(G_TOL, unit="Eh/bohr", gt=0)
-    g_rms_tol: float | None = _f(None, unit="Eh/bohr", tier="expert", gt=0)
-    d_tol: float | None = _f(None, unit="bohr", tier="expert", gt=0)
-    e_tol: float | None = _f(None, unit="Eh", tier="expert", gt=0)
+    max_iter: int = _c(500, ge=1)
+    g_tol: float = _c(G_TOL, unit="Eh/bohr", gt=0)
+    g_rms_tol: float | None = _c(None, unit="Eh/bohr", tier="expert", gt=0)
+    d_tol: float | None = _c(None, unit="bohr", tier="expert", gt=0)
+    e_tol: float | None = _c(None, unit="Eh", tier="expert", gt=0)
 
 
 class IRCConvergenceSettings(_Settings):
@@ -99,9 +127,9 @@ class IRCConvergenceSettings(_Settings):
         e_tol: Energy change (Hartree) below which a step counts as flat.
     """
 
-    max_iter: int = _f(300, ge=1)
-    g_tol: float = _f(5e-4, unit="Eh/bohr", gt=0)
-    e_tol: float = _f(1e-5, unit="Eh", tier="expert", gt=0)
+    max_iter: int = _c(300, ge=1)
+    g_tol: float = _c(5e-4, unit="Eh/bohr", gt=0)
+    e_tol: float = _c(1e-5, unit="Eh", tier="expert", gt=0)
 
 
 class TrustSettings(_Settings):
@@ -235,11 +263,11 @@ class ConstraintSettings(_Settings):
             one step while it is brought to its target.
     """
 
-    frozen: list[int] = _f([])
-    distance: list[list[float]] = _f([])
-    angle: list[list[float]] = _f([])
-    dihedral: list[list[float]] = _f([])
-    tol: float = _f(1e-6, tier="expert", gt=0)
+    frozen: list[int] = _f([], concern="model")
+    distance: list[list[float]] = _f([], concern="model")
+    angle: list[list[float]] = _f([], concern="model")
+    dihedral: list[list[float]] = _f([], concern="model")
+    tol: float = _c(1e-6, tier="expert", gt=0)
     max_correction: float = _f(0.1, tier="expert", gt=0)
 
     @property
@@ -255,7 +283,7 @@ class IRCConstraintSettings(_Settings):
         frozen: 0-based indices of atoms that do not move.
     """
 
-    frozen: list[int] = _f([])
+    frozen: list[int] = _f([], concern="model")
 
 
 class ModeSettings(_Settings):
@@ -286,7 +314,7 @@ class FreqSettings(_Settings):
     """
 
     check: bool = _f(False)
-    imaginary_cutoff: float = _f(10.0, unit="cm^-1", tier="expert")
+    imaginary_cutoff: float = _c(10.0, unit="cm^-1", tier="expert")
 
 
 class EscapeSettings(_Settings):
@@ -343,11 +371,11 @@ class EndSettings(_Settings):
 
     minimize: bool = _f(False)
     coordinate_system: CoordinateSystem = _f("auto", tier="expert")
-    max_iter: int = _f(500, tier="expert", ge=1)
-    g_tol: float = _f(G_TOL, unit="Eh/bohr", tier="expert", gt=0)
-    g_rms_tol: float | None = _f(None, unit="Eh/bohr", tier="expert", gt=0)
-    d_tol: float | None = _f(None, unit="bohr", tier="expert", gt=0)
-    e_tol: float | None = _f(None, unit="Eh", tier="expert", gt=0)
+    max_iter: int = _c(500, tier="expert", ge=1)
+    g_tol: float = _c(G_TOL, unit="Eh/bohr", tier="expert", gt=0)
+    g_rms_tol: float | None = _c(None, unit="Eh/bohr", tier="expert", gt=0)
+    d_tol: float | None = _c(None, unit="bohr", tier="expert", gt=0)
+    e_tol: float | None = _c(None, unit="Eh", tier="expert", gt=0)
 
     @property
     def convergence(self) -> ConvergenceSettings:
@@ -395,6 +423,9 @@ class OptimizationOptions(_Options):
         constraints: Frozen atoms; distances, angles and dihedrals held.
         freq: Frequencies at the final structure.
         escape: Stepping off saddle points.
+        threads: CPU threads the calculation asks the runner for, shared by its
+            gradient and Hessian calculations (qcopt's own steps take one); the
+            runner grants at most its own. Default: what the children's plans ask.
     """
 
     coordinate_system: CoordinateSystem = _f("auto")
@@ -404,6 +435,7 @@ class OptimizationOptions(_Options):
     constraints: ConstraintSettings = ConstraintSettings()
     freq: FreqSettings = FreqSettings()
     escape: EscapeSettings = EscapeSettings()
+    threads: int | None = _f(None, concern="resource", ge=1)
 
     @model_validator(mode="after")
     def _consistent(self) -> OptimizationOptions:
@@ -428,6 +460,9 @@ class TransitionStateOptions(_Options):
         constraints: Frozen atoms; distances, angles and dihedrals held.
         mode: Which eigenvector is climbed.
         freq: Frequencies at the final structure.
+        threads: CPU threads the calculation asks the runner for, shared by its
+            gradient and Hessian calculations (qcopt's own steps take one); the
+            runner grants at most its own. Default: what the children's plans ask.
     """
 
     coordinate_system: CoordinateSystem = _f("auto")
@@ -437,6 +472,7 @@ class TransitionStateOptions(_Options):
     constraints: ConstraintSettings = ConstraintSettings()
     mode: ModeSettings = ModeSettings()
     freq: FreqSettings = FreqSettings()
+    threads: int | None = _f(None, concern="resource", ge=1)
 
     @model_validator(mode="after")
     def _consistent(self) -> TransitionStateOptions:
@@ -458,6 +494,9 @@ class IRCOptions(_Options):
         hessian: The Hessian: start, update, recomputation.
         constraints: Frozen atoms.
         ends: Minimizing the ends.
+        threads: CPU threads the calculation asks the runner for, shared by its
+            gradient and Hessian calculations (qcopt's own steps take one); the
+            runner grants at most its own. Default: what the children's plans ask.
     """
 
     irc: IRCSettings = IRCSettings()
@@ -465,6 +504,7 @@ class IRCOptions(_Options):
     hessian: IRCHessianSettings = IRCHessianSettings()
     constraints: IRCConstraintSettings = IRCConstraintSettings()
     ends: EndSettings = EndSettings()
+    threads: int | None = _f(None, concern="resource", ge=1)
 
     @model_validator(mode="after")
     def _consistent(self) -> IRCOptions:
@@ -710,9 +750,42 @@ def default_options(calctype: str) -> dict[str, Any]:
     return model().model_dump()
 
 
+def _annotate(prop: dict[str, Any], path: str) -> None:
+    """``x-applies-to`` (the calculation types with this setting) and ``x-shared``."""
+    prop["x-applies-to"] = {
+        "calctypes": [
+            ct
+            for ct, model in OPTIONS.items()
+            if path in _paths(model) or path in model.model_fields
+        ]
+    }
+    if path in SHARED:
+        prop["x-shared"] = True
+
+
 def options_schema(calctype: str) -> dict[str, Any]:
-    """The JSON Schema of ``calctype``'s settings (units and tiers as extensions)."""
+    """The JSON Schema of ``calctype``'s settings.
+
+    As qcdata's conventions ask, every setting carries ``x-tier`` (common, expert),
+    ``x-concern`` (model, convergence, algorithm, resource), ``x-unit`` where it has
+    one, ``x-applies-to`` (``{"calctypes": [...]}``) and ``x-shared`` for the settings
+    AFH's programs share. A group carries the concern its settings share, else
+    ``algorithm``.
+    """
     model = OPTIONS.get(calctype)
     if model is None:
         raise InputError(f"qcopt does not run {calctype!r} calculations")
-    return model.model_json_schema()
+    schema = model.model_json_schema()
+    defs = schema.get("$defs", {})
+    for name, prop in schema["properties"].items():
+        _annotate(prop, name)
+        ref = prop.get("$ref")
+        if ref is None:
+            continue
+        group = defs[ref.rsplit("/", 1)[-1]]
+        concerns = {sub["x-concern"] for sub in group["properties"].values()}
+        prop["x-tier"] = "common"
+        prop["x-concern"] = concerns.pop() if len(concerns) == 1 else "algorithm"
+        for key, sub in group["properties"].items():
+            _annotate(sub, f"{name}.{key}")
+    return schema

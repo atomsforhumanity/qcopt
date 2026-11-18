@@ -327,6 +327,19 @@ def test_irc_branches_and_their_end_minimizations_keep_their_own_lineage():
     assert np.isclose(ends[0], MB_MINIMA[0][0], atol=1e-3)
 
 
+def test_a_calculation_s_threads_setting_is_what_it_asks_the_runner_for():
+    # qcdata's shared resource key: the runner grants it, at most its own
+    two = TOY.model_copy(update={"keywords": {"threads": 2}})
+    with qccompute.Runner(threads=2) as runner:
+        free = runner.compute(_input(children=[two]))
+        one = runner.compute(_input(children=[two], threads=1))
+        many = runner.compute(_input(children=[two], threads=4))
+    assert (free.execution.threads, one.execution.threads) == (2, 1)
+    assert not one.warnings
+    assert [(w.code, w.path) for w in many.warnings] == [("resource_capped", "threads")]
+    assert one.resolved.settings["threads"] == 1
+
+
 def test_each_calculation_of_a_list_reports_the_threads_it_ran_with():
     # ExecutionInfo.threads is what the calculation ran with: four calculations on
     # 8 threads ran with 2 each, not with the list's 8

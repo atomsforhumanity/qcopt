@@ -11,6 +11,7 @@ A minimization (`calctype="optimization"`): RS-RFO.
 | setting | type | default | unit | tier | meaning |
 |---|---|---|---|---|---|
 | `coordinate_system` | `auto`, `tric`, `dlc`, `cartesian` | `auto` |  | common | `tric`: delocalized internal coordinates with each fragment's translation and rotation (Wang and Song, 2016); `dlc`: delocalized internals with fragments joined by extra bonds; `cartesian`: Cartesians without rigid motion; `auto`: TRIC, or Cartesians when atoms are frozen or there are fewer than three. |
+| `threads` | int or None | off |  | common | CPU threads the calculation asks the runner for, shared by its gradient and Hessian calculations (qcopt's own steps take one); the runner grants at most its own. Default: what the children's plans ask. |
 
 ### `convergence`
 
@@ -85,6 +86,7 @@ A transition-state search (`calctype="transition_state"`): RS-P-RFO.
 | setting | type | default | unit | tier | meaning |
 |---|---|---|---|---|---|
 | `coordinate_system` | `auto`, `tric`, `dlc`, `cartesian` | `auto` |  | common | As for `OptimizationOptions`. |
+| `threads` | int or None | off |  | common | CPU threads the calculation asks the runner for, shared by its gradient and Hessian calculations (qcopt's own steps take one); the runner grants at most its own. Default: what the children's plans ask. |
 
 ### `convergence`
 
@@ -157,6 +159,10 @@ Harmonic frequencies at the final structure.
 ## IRC (`calctype="irc"`)
 
 An intrinsic reaction coordinate (`calctype="irc"`).
+
+| setting | type | default | unit | tier | meaning |
+|---|---|---|---|---|---|
+| `threads` | int or None | off |  | common | CPU threads the calculation asks the runner for, shared by its gradient and Hessian calculations (qcopt's own steps take one); the runner grants at most its own. Default: what the children's plans ask. |
 
 ### `irc`
 

@@ -81,8 +81,8 @@ def _rows(model: type[BaseModel], attrs: dict[str, str], prefix: str = "") -> li
         extra = (
             field.json_schema_extra if isinstance(field.json_schema_extra, dict) else {}
         )
-        unit = extra.get("unit", "")
-        tier = extra.get("tier", "")
+        unit = extra.get("x-unit", "")
+        tier = extra.get("x-tier", "")
         meaning = _md(attrs.get(key, ""))
         rows.append(
             f"| `{prefix}{key}` | {_type(field.annotation)} | {_default(field.default)} | {unit} "

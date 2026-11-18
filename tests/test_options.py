@@ -46,10 +46,25 @@ def test_defaults_and_schema_cover_every_setting(calctype):
     schema = options_schema(calctype)
     assert set(defaults) == set(schema["properties"])
     assert defaults["convergence"]["max_iter"] >= 1
-    # every group's settings carry a tier for documentation
+    # qcdata's conventions: every setting carries x-tier, x-concern, x-applies-to
+    concerns = {
+        "model",
+        "approximation",
+        "convergence",
+        "algorithm",
+        "resource",
+        "output",
+    }
+    props = [(name, prop) for name, prop in schema["properties"].items()]
     for name in schema["$defs"]:
-        for key, prop in schema["$defs"][name]["properties"].items():
-            assert prop.get("tier") in ("common", "expert"), (name, key)
+        props += list(schema["$defs"][name]["properties"].items())
+    for key, prop in props:
+        assert prop.get("x-tier") in ("common", "expert"), key
+        assert prop.get("x-concern") in concerns, key
+        assert calctype in prop["x-applies-to"]["calctypes"], key
+    top = schema["properties"]
+    assert top["threads"]["x-concern"] == "resource" and top["threads"]["x-shared"]
+    assert top["convergence"]["x-concern"] == "convergence"
 
 
 @pytest.mark.parametrize(

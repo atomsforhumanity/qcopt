@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+### Fixed
+
+- **`threads` is a setting**, AFH's shared resource key: what the calculation asks the
+  runner for, at most the runner's own. qcopt refused it as an unknown setting, so a
+  caller could not give a qcopt calculation `threads: 1`. A request above the grant
+  adds the shared `resource_capped` warning.
+- **The settings schema follows qcdata's conventions:** every setting carries
+  `x-tier`, `x-concern` (`model` for constraints, `convergence`, `algorithm`,
+  `resource`), `x-unit` where it has one, `x-applies-to` (`{"calctypes": [...]}`) and
+  `x-shared` for the shared names. The schema's `tier` and `unit` are now `x-tier`
+  and `x-unit`.
+
 ## [0.3.0a9] - 2026-11-17
 
 ### Added

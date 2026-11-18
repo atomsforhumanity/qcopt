@@ -104,6 +104,7 @@ default and unit):
 | `escape` | `attempts`, `step`: step off saddle points a minimization stops on | min |
 | `irc` | `direction`, `step` (bohr amu^1/2), `method` (`gs2`, `lqa`) | IRC |
 | `ends` | `minimize` (the IRC's ends), `coordinate_system`, `max_iter`, `g_tol` | IRC |
+| `threads` | CPU threads the calculation asks the runner for (AFH's shared resource key) | all |
 
 The rules, shared with AFH's other programs (axtb, linus):
 
@@ -114,7 +115,8 @@ The rules, shared with AFH's other programs (axtb, linus):
   `escape.step` without `escape.attempts`): you always know what is computed. Settings
   that act only if a condition arises during the run are allowed.
 - `qcopt.program.program.settings_schema(calctype)` is the JSON Schema of each calculation
-  type's settings.
+  type's settings, with each setting's `x-tier`, `x-concern`, `x-unit` and `x-applies-to`
+  as qcdata's conventions define them.
 
 [docs/choosing-settings.md](docs/choosing-settings.md) has the benchmark evidence behind
 the defaults and when to change them.

@@ -35,6 +35,7 @@ from qcdata import (
     ProgramInput,
     ProgramOutput,
     ProgramSpec,
+    ProgramWarning,
     Resolved,
 )
 from qcref import constants as c
@@ -255,7 +256,25 @@ class QcoptProgram:
             done = iter(run(prepared, ev, ctx.threads, progress, tasks, _halt(ctx)))
         finally:
             ev.close()
-        return [out if out is not None else next(done) for out in outputs]
+        share = None if ctx.threads is None else max(1, ctx.threads // len(prepared))
+        return [
+            out if out is not None else _capped(next(done), share) for out in outputs
+        ]
+
+
+def _capped(
+    out: ProgramOutput[ProgramInput, Data], granted: int | None
+) -> ProgramOutput[ProgramInput, Data]:
+    """``out`` with a ``resource_capped`` warning when it asked for more threads."""
+    asked = out.input_data.keywords.get("threads")
+    if granted is None or not isinstance(asked, int) or asked <= granted:
+        return out
+    warning = ProgramWarning(
+        code="resource_capped",
+        message=f"asked for {asked} threads; the runner granted {granted}",
+        path="threads",
+    )
+    return out.model_copy(update={"warnings": [*out.warnings, warning]})
 
 
 def _halt(ctx: RunContext) -> Callable[[], tuple[str, str] | None]:
