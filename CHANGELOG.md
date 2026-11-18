@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.3.0a10] - 2026-11-18
+
 ### Fixed
 
 - **`threads` is a setting**, AFH's shared resource key: what the calculation asks the
@@ -436,7 +438,8 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
   `find_ts` and `irc` names the Hessian program only, and other values are errors
   (a string was ignored).
 
-[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a9...HEAD
+[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a10...HEAD
+[0.3.0a10]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a10
 [0.3.0a9]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a9
 [0.3.0a8]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a8
 [0.3.0a7]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a7
