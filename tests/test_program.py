@@ -97,21 +97,21 @@ def test_plan_resolves_settings_and_states_no_threads():
     spec = TOY.model_copy(update={"keywords": {"threads": 3}})
     plan = program.plan(_input(children=[spec]))
     assert plan.resolved.settings["coordinate_system"] == "tric"
-    assert "threads" not in plan.resources.model_fields_set
+    assert "threads" not in plan.resources.model_dump(exclude_unset=True)
     with pytest.raises(ProgramError) as info:
         program.plan(_input(nonsense=1))
     assert info.value.error.kind == "input"
 
 
 class _ScalingProgram:
-    """A program whose plan takes the whole grant (``threads=None``), as DFT does."""
+    """A program whose plan names its memory, as DFT's does (and no threads)."""
 
     def plan(self, inp):
         from qcdata import Resolved
 
         return program_protocol.Plan(
             resolved=Resolved(settings={}),
-            resources=program_protocol.Resources(threads=None, memory_gib=3.0),
+            resources=program_protocol.Resources(memory_gib=3.0),
         )
 
 
@@ -123,7 +123,7 @@ def test_qcopt_s_plan_takes_its_children_s_memory_not_their_threads(monkeypatch)
     )
     dft = ProgramSpec(program="dft", calctype="hessian", model={"method": "b3lyp"})
     res = program.plan(_input(children=[TOY, dft])).resources
-    assert "threads" not in res.model_fields_set
+    assert "threads" not in res.model_dump(exclude_unset=True)
     assert res.memory_gib == 3.0
 
 
@@ -200,7 +200,7 @@ def test_a_child_that_refuses_its_settings_fails_only_its_own_calculation():
 
 
 def test_plan_checks_the_settings_of_its_children():
-    assert program.plan(_input()).resources.threads >= 1
+    assert program.plan(_input()).resolved.settings
     bad = TOY.model_copy(update={"keywords": {"nonsense": 1}})
     with pytest.raises(ProgramError) as info:
         program.plan(_input(children=[bad]))

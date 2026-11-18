@@ -82,16 +82,16 @@ wheels = [
 
 [[package]]
 name = "axtb"
-version = "0.2.0a1"
+version = "0.2.0a2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "qcdata" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c9/62/fec017fe9ff2c7e735f76ff94906f5a473cf2b0293b14c55e7989d062902/axtb-0.2.0a1.tar.gz", hash = "sha256:ac3abf09abf3fb080ca09d18322aa49b8924049b70c9d366d90c9de1ba9daa03", size = 1298518, upload-time = "2026-11-17T11:19:03.436Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fa/f9/f4f54a99fda420d6b270cba983ddf0fc32ae5ce8cd416840af89749b668f/axtb-0.2.0a2.tar.gz", hash = "sha256:db60dc07b3f749b1dd0107487c146802df7ec6604e6974c26089705dea7e2206", size = 1324908, upload-time = "2026-11-17T23:08:32.706Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/07/20/a8f31dcf6c513f39dde10f29b6d7a04e878738ec91fc8210560fee20f06d/axtb-0.2.0a1-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:aabeca859f982d149c4fdea5947aafcd5ad3435ef8dc39d2805b7141a45aaed2", size = 3344598, upload-time = "2026-11-17T11:19:01.531Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/c6/928ea7fd32cca95b5c674f68f7824d84e75a543a0d290f7694584ee6e96c/axtb-0.2.0a2-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:405b0249087c9126b9c552088327b2a047a41d30ca896c99f4f02b90a78335ad", size = 3412120, upload-time = "2026-11-17T23:08:30.906Z" },
 ]
 
 [[package]]
@@ -1137,15 +1137,15 @@ wheels = [
 
 [[package]]
 name = "qccompute"
-version = "0.23.0a7"
+version = "0.23.0rc1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "qcdata" },
     { name = "threadpoolctl" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cc/f2/2acfd4d5a563bd310ad21df47e88b3b69efcba10744e48c849405eedf3e1/qccompute-0.23.0a7.tar.gz", hash = "sha256:4a4e223410bacf54f29e61d72c705b2128589ecd185bc019c37f943b8e524244", size = 669969, upload-time = "2026-11-17T22:12:04.551Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/d9/ab57c17c683ba3ca996831d8d598ca0928183d3f8db7d2985d7ef6289a5a/qccompute-0.23.0rc1.tar.gz", hash = "sha256:faca94133d9f846461ba81f62854754dc4a6d892f57f5e3b4aed839af00f262a", size = 675337, upload-time = "2026-11-18T01:37:11.501Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ac/02/f5309227ae6591869f7a78c0f22e3246093462f6ab0f2e8905785c63cd97/qccompute-0.23.0a7-py3-none-any.whl", hash = "sha256:acfa9f08a991352ebec9e7f5d485182fd7430f4811e30f94b600397e4858a30d", size = 91301, upload-time = "2026-11-17T22:12:02.793Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/b5/71bebea13aa995c0d77e3aaf728f8cff6f9bc97e7802a3dc700f9ed44ce9/qccompute-0.23.0rc1-py3-none-any.whl", hash = "sha256:08f3916e2df4538c544a8f0c0717adfd4afcdd49b5108e6fc80d3ef8ad46d0d5", size = 93382, upload-time = "2026-11-18T01:37:10.102Z" },
 ]
 
 [[package]]
@@ -1169,7 +1169,7 @@ wheels = [
 
 [[package]]
 name = "qcopt"
-version = "0.3.0a10"
+version = "0.3.0a11"
 source = { editable = "." }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1202,7 +1202,7 @@ requires-dist = [
     { name = "axtb", marker = "extra == 'axtb'", specifier = ">=0.2.0a1" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "qccompute", specifier = ">=0.23.0a7" },
+    { name = "qccompute", specifier = ">=0.23.0rc1" },
     { name = "qcdata", specifier = ">=0.24.0a8" },
     { name = "qcref", specifier = ">=0.5.1" },
 ]

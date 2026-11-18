@@ -12,6 +12,7 @@ from qcdata import (
 )
 
 pytest.importorskip("axtb")
+pytestmark = pytest.mark.axtb
 
 ANG = 1.8897261259077824
 GUESS = Structure(

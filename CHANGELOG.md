@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+## [0.3.0a11] - 2026-11-18
+
 ### Changed
 
 - **A saddle escape minimizes both ways and keeps the lower** (mepd's rule). At a saddle
@@ -25,8 +27,8 @@ All notable changes to this project are documented here. The format follows
   and Hessian calculations run on it; qcopt's plan no longer states threads (it took
   the largest child's). A list's calculations run side by side, as many as the count
   allows, each on the count divided among them (at least 1). For many calculations at
-  once, set `threads: 1` on each input. Needs qccompute 0.23.0rc1: on earlier versions a
-  qcopt calculation without `threads` would get one thread.
+  once, set `threads: 1` on each input. Requires qccompute 0.23.0rc1, which removed
+  plans' threads (0.3.0a10 fails on it).
 
 ## [0.3.0a10] - 2026-11-18
 
@@ -460,7 +462,8 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
   `find_ts` and `irc` names the Hessian program only, and other values are errors
   (a string was ignored).
 
-[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a10...HEAD
+[unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a11...HEAD
+[0.3.0a11]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a11
 [0.3.0a10]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a10
 [0.3.0a9]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a9
 [0.3.0a8]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a8
