@@ -1,9 +1,12 @@
 """qcopt as an AFH program: run natively by qccompute, children through sessions."""
 
+from importlib import metadata
+
 import numpy as np
 import pytest
 import qccompute
 import qccompute.program as program_protocol
+from packaging.version import Version
 from qccompute.program import FunctionProgram
 from qccompute.testing import toy
 from qcdata import (
@@ -27,6 +30,12 @@ from .surfaces import (
     MB_SADDLES,
     muller_brown,
     muller_brown_hessian,
+)
+
+#: qccompute 0.23.0a8 (#102): a calculation without ``threads`` gets its caller's count
+CALLERS_COUNT = pytest.mark.skipif(
+    Version(metadata.version("qccompute")) < Version("0.23.0a8"),
+    reason="needs qccompute 0.23.0a8: a calculation gets its caller's count",
 )
 
 SIGMA = toy.DEFAULT_SIGMA
@@ -83,11 +92,12 @@ def test_qccompute_runs_qcopt_natively_on_a_session_program():
     assert all(f.record["warm_start"] for f in frames[1:])
 
 
-def test_plan_resolves_settings_and_takes_resources_from_the_children():
+def test_plan_resolves_settings_and_states_no_threads():
+    # qccompute 0.23.0a8: a calculation runs on its threads, else its caller's count
     spec = TOY.model_copy(update={"keywords": {"threads": 3}})
     plan = program.plan(_input(children=[spec]))
     assert plan.resolved.settings["coordinate_system"] == "tric"
-    assert plan.resources.threads == 3
+    assert "threads" not in plan.resources.model_fields_set
     with pytest.raises(ProgramError) as info:
         program.plan(_input(nonsense=1))
     assert info.value.error.kind == "input"
@@ -101,19 +111,20 @@ class _ScalingProgram:
 
         return program_protocol.Plan(
             resolved=Resolved(settings={}),
-            resources=program_protocol.Resources(threads=None),
+            resources=program_protocol.Resources(threads=None, memory_gib=3.0),
         )
 
 
-def test_a_child_that_takes_the_whole_grant_gives_qcopt_the_whole_grant(monkeypatch):
+def test_qcopt_s_plan_takes_its_children_s_memory_not_their_threads(monkeypatch):
     scaling = _ScalingProgram()
     monkeypatch.setattr(
         "qcopt.program.find_program",
         lambda name: scaling if name == "dft" else program_protocol.find_program(name),
     )
     dft = ProgramSpec(program="dft", calctype="hessian", model={"method": "b3lyp"})
-    assert program.plan(_input(children=[TOY])).resources.threads == 1
-    assert program.plan(_input(children=[TOY, dft])).resources.threads is None
+    res = program.plan(_input(children=[TOY, dft])).resources
+    assert "threads" not in res.model_fields_set
+    assert res.memory_gib == 3.0
 
 
 class _FailingSession:
@@ -331,15 +342,22 @@ def test_a_calculation_s_threads_setting_is_what_it_asks_the_runner_for():
     # qcdata's shared resource key: the runner grants it, at most its own
     two = TOY.model_copy(update={"keywords": {"threads": 2}})
     with qccompute.Runner(threads=2) as runner:
-        free = runner.compute(_input(children=[two]))
         one = runner.compute(_input(children=[two], threads=1))
         many = runner.compute(_input(children=[two], threads=4))
-    assert (free.execution.threads, one.execution.threads) == (2, 1)
+    assert one.execution.threads == 1
     assert not one.warnings
     assert [(w.code, w.path) for w in many.warnings] == [("resource_capped", "threads")]
     assert one.resolved.settings["threads"] == 1
 
 
+@CALLERS_COUNT
+def test_without_threads_a_calculation_runs_on_its_caller_s_count():
+    two = TOY.model_copy(update={"keywords": {"threads": 2}})
+    with qccompute.Runner(threads=2) as runner:
+        assert runner.compute(_input(children=[two])).execution.threads == 2
+
+
+@CALLERS_COUNT
 def test_each_calculation_of_a_list_reports_the_threads_it_ran_with():
     # ExecutionInfo.threads is what the calculation ran with: four calculations on
     # 8 threads ran with 2 each, not with the list's 8
@@ -390,21 +408,23 @@ def test_displaced_gradients_start_from_the_centre_and_are_not_kept():
     assert {lin for lin, _ in first} == {(0, None)}
 
 
-def test_tasks_run_side_by_side_within_the_granted_threads():
+def test_tasks_run_side_by_side_on_the_count_split_among_them():
     from qcopt.driver import Request
 
+    def split(threads, children, n=4):
+        ctx = prepare(_input(children=children)).context
+        requests = [Request(t, "gradient", np.zeros((3, 3)), ctx) for t in range(n)]
+        return SessionEvaluator(None, threads)._split([[k] for k in range(n)], requests)
+
     two = TOY.model_copy(update={"keywords": {"threads": 2}})
-    ctx = prepare(_input(children=[two])).context
-    requests = [Request(t, "gradient", np.zeros((3, 3)), ctx) for t in range(4)]
-    tasks = [[k] for k in range(4)]
-
-    def workers(threads):
-        return SessionEvaluator(None, threads)._workers(tasks, requests)
-
-    assert workers(None) == 4  # nothing granted: the programs' own settings
-    assert workers(8) == 4  # 2 threads each
-    assert workers(4) == 2  # each asks for 2
-    assert workers(1) == 1
+    # (tasks at once, each one's sessions' threads)
+    assert split(None, [TOY]) == (4, None)  # not granted: the programs' own
+    assert split(8, [TOY]) == (4, 2)  # 8 // 4
+    assert split(8, [TOY], n=16) == (8, 1)
+    assert split(3, [TOY]) == (3, 1)
+    assert split(8, [two]) == (4, 2)  # each child asks for 2
+    assert split(4, [two]) == (2, 2)
+    assert split(1, [two]) == (1, 1)
 
 
 class _GroupSession(_MBSession):

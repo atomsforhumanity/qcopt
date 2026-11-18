@@ -190,7 +190,7 @@ class QcoptProgram:
         return {"type": "object", "properties": props}
 
     def plan(self, inp: ProgramInput) -> Plan:
-        """Check the input and resolve every ``auto``; resources from the children.
+        """Check the input and resolve every ``auto``; memory and GPUs from the children.
 
         Raises:
             ProgramError: Kind ``input``: an input qcopt cannot run. Kind ``program``:
@@ -305,12 +305,13 @@ def _input_failure(
 
 
 def _plan_children(inp: ProgramInput) -> Resources:
-    """Plan the installed children: their errors are the run's, their resources its own.
+    """Plan the installed children: their errors are the run's.
 
     A child's settings are checked here, before anything is computed (an unknown key, a
     setting that cannot take effect). Children run through qccompute's codecs are
-    checked when they run. qcopt's own work is light: the resources are the largest
-    child's (threads ``None``, the whole grant, if any child's are).
+    checked when they run. The plan states no threads (qccompute 0.23.0a8 gives a
+    calculation its ``threads``, else its caller's count, which its children share);
+    the memory and GPUs are the largest child's.
 
     When the Hessians come from the gradient program's own calculation, one session
     serves both, and a setting is valid if it applies to either (a session's rule): only
@@ -320,7 +321,6 @@ def _plan_children(inp: ProgramInput) -> Resources:
         ProgramError: Kind ``program``, with the child's error as the cause.
     """
     structure = inp.require_structure()
-    threads: int | None = 1
     memory, gpus = None, 0
     hessians = [c for c in inp.subprograms if c.calctype == CalcType.hessian]
     for child in inp.subprograms:
@@ -330,7 +330,6 @@ def _plan_children(inp: ProgramInput) -> Resources:
             continue
         program = find_program(child.program)
         if program is None:
-            threads = _most(threads, int(child.keywords.get("threads", 1)))
             continue
         try:
             res = plan_of(program, ProgramInput.from_spec(child, structure)).resources
@@ -343,16 +342,10 @@ def _plan_children(inp: ProgramInput) -> Resources:
                     cause=exc.error,
                 )
             ) from None
-        threads = _most(threads, res.threads)
         gpus = max(gpus, res.gpus)
         if res.memory_gib is not None:
             memory = max(memory or 0.0, res.memory_gib)
-    return Resources(threads=threads, memory_gib=memory, gpus=gpus)
-
-
-def _most(a: int | None, b: int | None) -> int | None:
-    """The larger of two thread counts, where None (the whole grant) is the largest."""
-    return None if a is None or b is None else max(a, b)
+    return Resources(memory_gib=memory, gpus=gpus)
 
 
 #: The object registered under the ``qccompute.programs`` entry point ``qcopt``.

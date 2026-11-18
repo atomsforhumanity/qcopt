@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+### Changed
+
+- **Threads follow qccompute 0.23.0a8's rules** (one count per calculation). A qcopt
+  calculation runs on its `threads`, else its caller's whole count, and its gradient
+  and Hessian calculations run on it; qcopt's plan no longer states threads (it took
+  the largest child's). A list's calculations run side by side, as many as the count
+  allows, each on the count divided among them (at least 1). For many calculations at
+  once, set `threads: 1` on each input. Needs qccompute 0.23.0a8: on earlier versions a
+  qcopt calculation without `threads` would get one thread.
+
 ## [0.3.0a10] - 2026-11-18
 
 ### Fixed

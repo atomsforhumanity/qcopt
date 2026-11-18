@@ -423,9 +423,9 @@ class OptimizationOptions(_Options):
         constraints: Frozen atoms; distances, angles and dihedrals held.
         freq: Frequencies at the final structure.
         escape: Stepping off saddle points.
-        threads: CPU threads the calculation asks the runner for, shared by its
-            gradient and Hessian calculations (qcopt's own steps take one); the
-            runner grants at most its own. Default: what the children's plans ask.
+        threads: CPU threads of the calculation, at most its caller's: its gradient
+            and Hessian calculations run on them (qcopt's own steps take one).
+            Default: the caller's whole count (at top level, the runner's threads).
     """
 
     coordinate_system: CoordinateSystem = _f("auto")
@@ -460,9 +460,9 @@ class TransitionStateOptions(_Options):
         constraints: Frozen atoms; distances, angles and dihedrals held.
         mode: Which eigenvector is climbed.
         freq: Frequencies at the final structure.
-        threads: CPU threads the calculation asks the runner for, shared by its
-            gradient and Hessian calculations (qcopt's own steps take one); the
-            runner grants at most its own. Default: what the children's plans ask.
+        threads: CPU threads of the calculation, at most its caller's: its gradient
+            and Hessian calculations run on them (qcopt's own steps take one).
+            Default: the caller's whole count (at top level, the runner's threads).
     """
 
     coordinate_system: CoordinateSystem = _f("auto")
@@ -494,9 +494,9 @@ class IRCOptions(_Options):
         hessian: The Hessian: start, update, recomputation.
         constraints: Frozen atoms.
         ends: Minimizing the ends.
-        threads: CPU threads the calculation asks the runner for, shared by its
-            gradient and Hessian calculations (qcopt's own steps take one); the
-            runner grants at most its own. Default: what the children's plans ask.
+        threads: CPU threads of the calculation, at most its caller's: its gradient
+            and Hessian calculations run on them (qcopt's own steps take one).
+            Default: the caller's whole count (at top level, the runner's threads).
     """
 
     irc: IRCSettings = IRCSettings()

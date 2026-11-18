@@ -392,8 +392,10 @@ class SessionEvaluator:
 
     Each task's requests of a round go to its sessions in one ``compute_many`` call
     (so the 6N displaced gradients of a finite-difference Hessian are one batch);
-    tasks run side by side in threads (the runner makes that safe), as many at a time
-    as the granted threads allow. A request continues its lineage's history (the
+    tasks run side by side in threads (the runner makes that safe): as many at a time
+    as qcopt's thread count allows, each task's sessions opened with the count divided
+    by the tasks running (at least 1), as qccompute's rule for a parent's children
+    asks. A request continues its lineage's history (the
     task, and the IRC branch); the displaced gradients of a finite-difference Hessian
     start from the centre's and do not become history. A task's sessions close when it
     finishes.
@@ -402,8 +404,8 @@ class SessionEvaluator:
         open_session: Opens a session from the child's input (its spec at the task's
             starting structure), its threads and the calctypes it serves:
             ``RunContext.session`` with those keywords.
-        threads: The threads to share among the tasks' sessions (None: the
-            programs' own settings).
+        threads: qcopt's thread count, shared by the tasks running side by side
+            (None: not granted; each session takes its program's own).
     """
 
     def __init__(self, open_session: OpenSession, threads: int | None = None) -> None:
@@ -421,10 +423,20 @@ class SessionEvaluator:
         """Yes: a session's Hessian comes with the energy and gradient."""
         return True
 
-    def _share(self, n_tasks: int) -> int | None:
+    def _split(
+        self, tasks: Sequence[list[int]], requests: Sequence[Request]
+    ) -> tuple[int, int | None]:
+        """How many tasks run at once, and each one's sessions' threads.
+
+        As many as the count allows when each takes at least the threads its programs'
+        settings ask for (``threads``; 1 if they do not say), and the count divided
+        among those, at least 1.
+        """
         if self.threads is None:
-            return None
-        return max(1, self.threads // max(1, n_tasks))
+            return len(tasks), None
+        need = max(_threads(self._role(requests[k])[1]) for ks in tasks for k in ks)
+        workers = max(1, min(len(tasks), self.threads // need))
+        return workers, max(1, self.threads // workers)
 
     @staticmethod
     def _role(r: Request) -> tuple[str, ProgramSpec]:
@@ -435,7 +447,7 @@ class SessionEvaluator:
                 return "hessian", ctx.hessian_spec
         return "gradient", ctx.gradient_spec
 
-    def _session(self, r: Request, n_tasks: int) -> Session:
+    def _session(self, r: Request, threads: int | None) -> Session:
         ctx = r.context
         role, spec = self._role(r)
         key = (r.task, role)
@@ -454,40 +466,24 @@ class SessionEvaluator:
                     calctypes.add("hessian")
             self._sessions[key] = self.open_session(
                 ProgramInput.from_spec(spec, structure),
-                self._share(n_tasks),
+                threads,
                 calctypes,
             )
         return self._sessions[key]
-
-    def _workers(self, tasks: Sequence[list[int]], requests: Sequence[Request]) -> int:
-        """How many tasks run at once: all, or as many as the granted threads allow.
-
-        A task needs its share of the grant, or the threads its programs' settings ask
-        for (``threads``; a program run through ``qccompute.compute`` takes those),
-        whichever is more.
-        """
-        if self.threads is None:
-            return len(tasks)
-        share = self._share(len(tasks)) or 1
-        need = max(
-            max([share] + [_threads(self._role(requests[k])[1]) for k in ks])
-            for ks in tasks
-        )
-        return max(1, min(len(tasks), self.threads // need))
 
     def __call__(self, requests: Sequence[Request]) -> list[Answer]:
         """Compute a round: each task's requests in order, tasks side by side."""
         by_task: dict[int, list[int]] = defaultdict(list)
         for k, r in enumerate(requests):
             by_task[r.task].append(k)
-        n_tasks = len(by_task)
+        workers, threads = self._split(list(by_task.values()), requests)
         answers: list[Answer | None] = [None] * len(requests)
 
         def run_task(indices: list[int]) -> None:
             by_session: dict[int, tuple[Session, list[int]]] = {}
             for k in indices:
                 try:
-                    session = self._session(requests[k], n_tasks)
+                    session = self._session(requests[k], threads)
                 except Exception as exc:  # noqa: BLE001 - this request's answer
                     # the program refused its settings or could not start: this
                     # task's request fails with the program's error, not the round
@@ -501,7 +497,6 @@ class SessionEvaluator:
                 for k, frame in zip(ks, frames, strict=True):
                     answers[k] = _answer(requests[k], frame, session)
 
-        workers = self._workers(list(by_task.values()), requests)
         if workers > 1:
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 list(pool.map(run_task, by_task.values()))
