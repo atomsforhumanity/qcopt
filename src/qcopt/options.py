@@ -320,12 +320,18 @@ class FreqSettings(_Settings):
 class EscapeSettings(_Settings):
     """Stepping off saddle points a minimization stops on.
 
+    At a saddle point, the structure is displaced both ways along the lowest mode,
+    both sides are minimized together, and the lower converged minimum is kept (a
+    side that fails leaves the other). Which side lies downhill at a converged saddle
+    point is set by the gradient's noise, so neither is preferred.
+    ``record["escapes"]`` gives each escape's two energies and the side kept.
+
     Attributes:
         attempts: Check the converged structure's frequencies and, at a saddle
-            point, step off it along the lowest mode and minimize again, up to this
-            many times (0: no check). Still a saddle point after that, the run
-            fails (with the gradient method's own Hessians).
-        step: Largest atomic displacement (bohr) of such a step.
+            point, minimize both ways off it, up to this many times (0: no check).
+            Still a saddle point after that, the run fails (with the gradient
+            method's own Hessians).
+        step: Largest atomic displacement (bohr) each way.
     """
 
     attempts: int = _f(0, ge=0)

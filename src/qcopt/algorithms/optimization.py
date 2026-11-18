@@ -22,6 +22,7 @@ saddle point.
 from __future__ import annotations
 
 from collections.abc import Hashable, Sequence
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -35,6 +36,8 @@ from ..geometry import Array, max_atomic_norm, rms
 from ..internal import CoordinateError
 from ..options import (
     ConvergenceSettings,
+    EscapeSettings,
+    FreqSettings,
     OptimizationOptions,
     TransitionStateOptions,
 )
@@ -48,6 +51,7 @@ from .common import (
     RunResult,
     guarded,
     halted,
+    lockstep,
     program_failed,
     resolve_initial_hessian,
     with_hessian,
@@ -190,6 +194,7 @@ class _Optimization:
         self.start = start
         self.own = own_hessian  # exact Hessians are the gradient method's own
         self.lineage = lineage
+        self.has_hessian_program = has_hessian_program
         self.report = report
         self.reported = 0  # frames reported so far
         self.count = progress.count = Counter()
@@ -283,9 +288,7 @@ class _Optimization:
                 outcome = yield from self._escape_saddle()
                 if isinstance(outcome, RunResult):
                     return outcome
-                if outcome:
-                    break
-                continue
+                break
             if self.iterations >= self.opts.convergence.max_iter:
                 break
             self.iterations += 1
@@ -627,78 +630,148 @@ class _Optimization:
                 "saddle_point",
             )
 
-    def _downhill(self, mode: Array) -> Array:
-        """The mode, signed to point toward lower energy.
-
-        An eigenvector's sign is arbitrary: another LAPACK build may flip it, and an
-        escape along it would then reach the other minimum. The step goes against the
-        gradient's component along the mode, the side of the saddle point the
-        structure already lies on. Without such a component, the largest displacement
-        is made positive (the IRC's convention).
-
-        Args:
-            mode: ``(n, 3)`` Cartesian displacement of the imaginary mode.
-        """
-        slope = float(
-            np.dot(np.asarray(self.a.gradient, dtype=float).ravel(), mode.ravel())
-        )
-        if slope == 0.0:
-            return mode * np.sign(mode.flat[np.argmax(np.abs(mode))])
-        return -np.sign(slope) * mode
-
     def _escape_saddle(self) -> Algorithm:
-        """Check the frequencies; at a saddle point, step off along the lowest mode.
+        """Check the frequencies; at a saddle point, minimize both ways off it.
 
-        Returns True when the run is over, False to continue minimizing, or a failed
-        result.
+        Along the lowest mode, ``escape.step`` each way, two minimizations run
+        together from the saddle point's Hessian, and the lower converged one is kept
+        (mepd's rule). Then its frequencies are checked in turn, up to
+        ``escape.attempts`` times. Neither side is preferred: which one lies downhill
+        at a converged saddle point is set by the gradient's noise. One side that
+        fails leaves the other.
+
+        Returns True when the run is over (a minimum, or still a saddle point after
+        every attempt), or a failed result.
         """
         opts = self.opts
         assert isinstance(opts, OptimizationOptions)
-        x = self.x
-        (ha,) = self.count((yield [Ask("hessian", x, self.lineage)]))
-        if not ha.success:
-            self._fail(
-                "program",
-                f"the Hessian to check for a saddle point failed: {ha.error}",
-                cause=ha,
-            )
-            return True
-        hx = np.asarray(ha.hessian)
-        self.frames[-1] = with_hessian(self.frames[-1], hx)
-        frozen = opts.constraints.frozen
-        self.freqs = frequencies(hx, self.symbols, x, frozen=frozen)
-        n_imag = self.freqs.n_imaginary(opts.freq.imaginary_cutoff)
-        if n_imag == 0 or self.escapes >= opts.escape.attempts:
-            if n_imag and self.own:
+        while True:
+            x = self.x
+            (ha,) = self.count((yield [Ask("hessian", x, self.lineage)]))
+            if not ha.success:
                 self._fail(
-                    "convergence",
-                    f"still a saddle point ({n_imag} imaginary modes) after "
-                    f"{self.escapes} escapes",
-                    "saddle_point",
+                    "program",
+                    f"the Hessian to check for a saddle point failed: {ha.error}",
+                    cause=ha,
                 )
-            return True
-        self.converged = False
-        self.escapes += 1
-        self.iterations += 1
-        self.info["saddle_escapes"] = self.escapes
-        mode = self._downhill(np.asarray(self.freqs.modes[0], dtype=float))
-        self.x = x = x + mode / max_atomic_norm(mode) * opts.escape.step
-        (a,) = self.count((yield [Ask("gradient", x, self.lineage)]))
-        if not a.success:
-            where = "stepping off a saddle point"
-            return program_failed(self.frames + [a], a, where, self.info)
-        self.a = a
-        self.frames.append(a)
-        self.coords.at(x)
-        self.h = self.coords.hessian(x, hx)
-        self.g = self.coords.gradient(x, np.asarray(a.gradient, dtype=float))
-        self.trust, self.last_step, self.last_de, self.freqs = (
-            self.trust0,
-            None,
-            None,
-            None,
+                return True
+            hx = np.asarray(ha.hessian)
+            self.frames[-1] = with_hessian(self.frames[-1], hx)
+            frozen = opts.constraints.frozen
+            self.freqs = frequencies(hx, self.symbols, x, frozen=frozen)
+            n_imag = self.freqs.n_imaginary(opts.freq.imaginary_cutoff)
+            if n_imag == 0 or self.escapes >= opts.escape.attempts:
+                if n_imag and self.own:
+                    self._fail(
+                        "convergence",
+                        f"still a saddle point ({n_imag} imaginary modes) after "
+                        f"{self.escapes} escapes",
+                        "saddle_point",
+                    )
+                return True
+            self.escapes += 1
+            self.iterations += 1
+            self.info["saddle_escapes"] = self.escapes
+            failed = yield from self._both_ways(hx)
+            if failed is not None:
+                return failed
+
+    def _both_ways(self, hx: Array) -> Algorithm:
+        """Minimize from both sides of the saddle point at ``x``; keep the lower.
+
+        Returns None once the kept minimization is this run's, or a failed result
+        when neither side converged.
+        """
+        opts = self.opts
+        assert isinstance(opts, OptimizationOptions)
+        mode = np.asarray(self.freqs.modes[0], dtype=float)
+        step = mode / max_atomic_norm(mode) * opts.escape.step
+        tag = f"escape {self.escapes}"
+        line = tag if self.lineage is None else f"{self.lineage}, {tag}"
+        sides = {"+": self.x + step, "-": self.x - step}
+        lines = {s: f"{line} {s}" for s in sides}
+        asked = self.count(
+            (yield [Ask("gradient", xs, lines[s]) for s, xs in sides.items()])
         )
-        return False
+        starts = dict(zip(sides, asked, strict=True))
+        remaining = max(1, opts.convergence.max_iter - self.iterations)
+        side_opts = opts.model_copy(
+            update={
+                "escape": EscapeSettings(),
+                "freq": FreqSettings(imaginary_cutoff=opts.freq.imaginary_cutoff),
+                "convergence": opts.convergence.model_copy(
+                    update={"max_iter": remaining}
+                ),
+            }
+        )
+        subs = {
+            s: optimize(
+                sides[s],
+                self.symbols,
+                self.numbers,
+                side_opts,
+                has_hessian_program=self.has_hessian_program,
+                start=(a, hx),
+                own_hessian=self.own,
+                lineage=lines[s],
+                report=self.report,
+            )
+            for s, a in starts.items()
+            if a.success
+        }
+        if not subs:
+            a = asked[0]
+            self._counts()
+            return program_failed(
+                self.frames + [a], a, "stepping off a saddle point", self.info
+            )
+        results = yield from lockstep(subs)  # type: ignore[arg-type]
+        energies: dict[str, float | None] = dict.fromkeys(sides)
+        done: dict[str, RunResult] = {}
+        for s, res in results.items():
+            if not isinstance(res, RunResult):
+                continue
+            self.count.gradients += res.info.get("n_gradients", 0)
+            self.count.hessians += res.info.get("n_hessians", 0)
+            if res.frames:
+                energies[s] = float(res.frames[-1].energy)
+            if res.error is None and res.converged:
+                done[s] = res
+        if not done:
+            tried = [r for r in results.values() if isinstance(r, RunResult)]
+            if not tried:
+                raise next(iter(results.values()))  # a bug in a side's minimization
+            worst = min(tried, key=lambda r: float(r.frames[-1].energy))
+            self.info.setdefault("escapes", []).append(
+                {"energies": energies, "kept": None}
+            )
+            self._counts()
+            return replace(worst, frames=self.frames + worst.frames, info=self.info)
+        kept = min(done, key=lambda s: float(done[s].frames[-1].energy))
+        res = done[kept]
+        self.info.setdefault("escapes", []).append({"energies": energies, "kept": kept})
+        self.frames += res.frames
+        # the kept side's steps and counts are this run's (gradients counted both)
+        self.log += [{**entry, "escape": self.escapes} for entry in res.info["log"]]
+        for key in (
+            "rejected_steps",
+            "hessian_recomputes",
+            "coordinate_rebuilds",
+            "backtransform_failures",
+        ):
+            self.info[key] += res.info.get(key, 0)
+        self.a = res.frames[-1]
+        self.x = np.asarray(self.a.positions, dtype=float).reshape(self.n, 3)
+        self.iterations += res.info.get("n_steps", len(res.frames) - 1)
+        self.trust = res.info.get("final_trust", self.trust)
+        self.last_step, self.last_de = None, None
+        return None
+
+    def _counts(self) -> None:
+        """The counts so far in ``info``, for a result returned early."""
+        self.info.update(
+            n_gradients=self.count.gradients, n_hessians=self.count.hessians
+        )
 
     def _final_frequencies(self) -> Algorithm:
         """With ``freq.check``, the final structure's frequencies (they may decide)."""

@@ -1027,6 +1027,49 @@ def test_trust_after_a_saddle_escape_stays_within_trust_max():
     assert max(s["trust"] for s in out.record["log"]) <= 0.05
 
 
+def test_a_saddle_escape_minimizes_both_ways_and_keeps_the_lower():
+    # Muller-Brown's first saddle point joins minima at -146.7 and -80.8 (x 1e-3):
+    # which side lies downhill there is noise; both are minimized, the lower kept
+    out = minimize(
+        _mb(MB_SADDLES[0]),
+        MB,
+        hessian_program=True,
+        evaluator=_ev(),
+        coordinate_system="cartesian",
+        escape={"attempts": 1},
+    )
+    assert out.success, out.traceback
+    (escape,) = out.record["escapes"]
+    energies = escape["energies"]
+    assert set(energies) == {"+", "-"} and None not in energies.values()
+    assert escape["kept"] == min(energies, key=energies.get)
+    final = np.asarray(out.results.final_structure.geometry)[0, :2]
+    np.testing.assert_allclose(final, MB_MINIMA[0], atol=1e-3)  # the lower minimum
+    assert out.record["log"] and all(s["escape"] == 1 for s in out.record["log"])
+
+
+def test_a_side_that_fails_leaves_the_other():
+    # gradients fail on the lower minimum's side: the escape keeps the higher one
+    def mb(x):
+        if x[0, 1] > 0.7:
+            raise RuntimeError("SCF did not converge")
+        return muller_brown(x)
+
+    out = minimize(
+        _mb(MB_SADDLES[0]),
+        MB,
+        hessian_program=True,
+        evaluator=FunctionEvaluator(mb, muller_brown_hessian),
+        coordinate_system="cartesian",
+        escape={"attempts": 1},
+    )
+    assert out.success, out.traceback
+    (escape,) = out.record["escapes"]
+    assert escape["kept"] is not None
+    final = np.asarray(out.results.final_structure.geometry)[0, :2]
+    np.testing.assert_allclose(final, MB_MINIMA[2], atol=1e-3)
+
+
 def test_a_saddle_escape_does_not_depend_on_the_mode_s_sign(monkeypatch):
     # An eigensolver may return either sign (numpy 2.5.4 and 2.5.5 differ): the
     # escape must reach the same minimum either way.

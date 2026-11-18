@@ -32,10 +32,10 @@ from .surfaces import (
     muller_brown_hessian,
 )
 
-#: qccompute 0.23.0a8 (#102): a calculation without ``threads`` gets its caller's count
+#: qccompute 0.23.0rc1 (#102): a calculation without ``threads`` gets its caller's count
 CALLERS_COUNT = pytest.mark.skipif(
-    Version(metadata.version("qccompute")) < Version("0.23.0a8"),
-    reason="needs qccompute 0.23.0a8: a calculation gets its caller's count",
+    Version(metadata.version("qccompute")) < Version("0.23.0rc1"),
+    reason="needs qccompute 0.23.0rc1: a calculation gets its caller's count",
 )
 
 SIGMA = toy.DEFAULT_SIGMA
@@ -93,7 +93,7 @@ def test_qccompute_runs_qcopt_natively_on_a_session_program():
 
 
 def test_plan_resolves_settings_and_states_no_threads():
-    # qccompute 0.23.0a8: a calculation runs on its threads, else its caller's count
+    # qccompute 0.23.0rc1: a calculation runs on its threads, else its caller's count
     spec = TOY.model_copy(update={"keywords": {"threads": 3}})
     plan = program.plan(_input(children=[spec]))
     assert plan.resolved.settings["coordinate_system"] == "tric"

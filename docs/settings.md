@@ -76,8 +76,8 @@ Stepping off saddle points a minimization stops on.
 
 | setting | type | default | unit | tier | meaning |
 |---|---|---|---|---|---|
-| `escape.attempts` | int | 0 |  | common | Check the converged structure's frequencies and, at a saddle point, step off it along the lowest mode and minimize again, up to this many times (0: no check). Still a saddle point after that, the run fails (with the gradient method's own Hessians). |
-| `escape.step` | float | 0.189 | bohr | expert | Largest atomic displacement (bohr) of such a step. |
+| `escape.attempts` | int | 0 |  | common | Check the converged structure's frequencies and, at a saddle point, minimize both ways off it, up to this many times (0: no check). Still a saddle point after that, the run fails (with the gradient method's own Hessians). |
+| `escape.step` | float | 0.189 | bohr | expert | Largest atomic displacement (bohr) each way. |
 
 ## Transition-state search (`calctype="transition_state"`)
 

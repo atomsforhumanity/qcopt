@@ -8,12 +8,24 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
-- **Threads follow qccompute 0.23.0a8's rules** (one count per calculation). A qcopt
+- **A saddle escape minimizes both ways and keeps the lower** (mepd's rule). At a saddle
+  point a minimization stopped on, the structure is displaced `escape.step` each way
+  along the lowest mode, both sides are minimized together, and the lower converged
+  minimum is kept; a side that fails leaves the other. qcopt stepped one way, downhill
+  along the gradient, but at a converged saddle point that gradient is noise. On 100
+  Reaction-QM transition states at g-xTB, 98 joined two minima. The downhill step reached
+  the lower one 47 times and the higher one 38 times (median 26.5 kcal/mol higher); both
+  ways reach the lower one 87 times and the higher once (10 end at a nearby third
+  minimum). Where escapes ran at two SCF accuracies (axtb `accuracy_scale` 0.01 and 1),
+  downhill chose the same side 16 of 23 times, both ways 25 of 25. `record["escapes"]` gives each
+  escape's two energies and the side kept, and the kept side's steps join the record's
+  log. An escape costs two minimizations. Optimization numerics epoch 3.
+- **Threads follow qccompute 0.23.0rc1's rules** (one count per calculation). A qcopt
   calculation runs on its `threads`, else its caller's whole count, and its gradient
   and Hessian calculations run on it; qcopt's plan no longer states threads (it took
   the largest child's). A list's calculations run side by side, as many as the count
   allows, each on the count divided among them (at least 1). For many calculations at
-  once, set `threads: 1` on each input. Needs qccompute 0.23.0a8: on earlier versions a
+  once, set `threads: 1` on each input. Needs qccompute 0.23.0rc1: on earlier versions a
   qcopt calculation without `threads` would get one thread.
 
 ## [0.3.0a10] - 2026-11-18

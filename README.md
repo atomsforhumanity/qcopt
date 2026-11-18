@@ -100,7 +100,7 @@ default and unit):
 | `constraints` | `frozen`, `distance`, `angle`, `dihedral` (degrees) | min, TS (IRC: `frozen`) |
 | `mode` | `guide` (a direction to climb), `follow` | TS |
 | `freq` | `check` (frequencies at the end decide), `imaginary_cutoff` (cm⁻¹) | min, TS |
-| `escape` | `attempts`, `step`: step off saddle points a minimization stops on | min |
+| `escape` | `attempts`, `step`: minimize both ways off saddle points a minimization stops on, and keep the lower | min |
 | `irc` | `direction`, `step` (bohr amu^1/2), `method` (`gs2`, `lqa`) | IRC |
 | `ends` | `minimize` (the IRC's ends), `coordinate_system`, `max_iter`, `g_tol` | IRC |
 | `threads` | CPU threads the calculation asks the runner for (AFH's shared resource key) | all |
@@ -146,7 +146,7 @@ The output's standard slots, the same in every AFH program:
 
 | Calculation | Method |
 |---|---|
-| `optimization` | RS-RFO in TRIC coordinates (Wang and Song, 2016: each molecule's internal coordinates plus its translation and rotation), or delocalized internals, or Cartesians; Lindh model Hessian or the program's exact one; BFGS updates (Bofill while the Hessian is indefinite); optional frequency check that steps off saddle points |
+| `optimization` | RS-RFO in TRIC coordinates (Wang and Song, 2016: each molecule's internal coordinates plus its translation and rotation), or delocalized internals, or Cartesians; Lindh model Hessian or the program's exact one; BFGS updates (Bofill while the Hessian is indefinite); optional frequency check that minimizes both ways off saddle points and keeps the lower |
 | `transition_state` | RS-P-RFO climbing the lowest mode (or, in Cartesians, one following a guide direction); exact (or a cheaper method's) or finite-difference starting Hessian; TS-BFGS updates; recomputed when the negative mode is lost; fails when it ends without negative curvature |
 | `irc` | Mass-weighted steepest descent by Gonzalez-Schlegel steps (or the local quadratic approximation), both branches together, frames in the input's frame; overshoots retried at half the step; optionally both ends minimized together |
 
