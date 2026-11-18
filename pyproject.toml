@@ -32,7 +32,7 @@ Changelog = "https://github.com/atomsforhumanity/qcopt/blob/main/CHANGELOG.md"
 "Bug Tracker" = "https://github.com/atomsforhumanity/qcopt/issues"
 
 [project.optional-dependencies]
-axtb = ["axtb>=0.2.0a1"]
+axtb = ["axtb>=0.2.0a3"]
 
 [project.entry-points."qccompute.programs"]
 qcopt = "qcopt.program:program"

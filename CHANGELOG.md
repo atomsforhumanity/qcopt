@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [unreleased]
 
+### Fixed
+
+- The `axtb` extra requires axtb 0.2.0a3, the first whose plans validate on qccompute
+  0.23.0rc1 (earlier ones state `threads`, which rc1 removed).
+
 ## [0.3.0a11] - 2026-11-18
 
 ### Changed

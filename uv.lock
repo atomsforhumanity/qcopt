@@ -82,16 +82,16 @@ wheels = [
 
 [[package]]
 name = "axtb"
-version = "0.2.0a2"
+version = "0.2.0a3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "qcdata" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fa/f9/f4f54a99fda420d6b270cba983ddf0fc32ae5ce8cd416840af89749b668f/axtb-0.2.0a2.tar.gz", hash = "sha256:db60dc07b3f749b1dd0107487c146802df7ec6604e6974c26089705dea7e2206", size = 1324908, upload-time = "2026-11-17T23:08:32.706Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/24/1c/1b6b1fb395c0a8f9cc68036ec8782d523bb2b8fb5f5f8ddee20ff6864b4c/axtb-0.2.0a3.tar.gz", hash = "sha256:f265f1a120ca486b22dfb2f12f724781764cbfe0ca98dabcda8781f9e7115811", size = 1325132, upload-time = "2026-11-18T01:51:10.749Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8e/c6/928ea7fd32cca95b5c674f68f7824d84e75a543a0d290f7694584ee6e96c/axtb-0.2.0a2-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:405b0249087c9126b9c552088327b2a047a41d30ca896c99f4f02b90a78335ad", size = 3412120, upload-time = "2026-11-17T23:08:30.906Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/e2/ed2921c521b05a158ee1d66175b3a486d56eec9a889678fafde4785d24eb/axtb-0.2.0a3-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:d7be9accbdc5947e4221924bd6b2cce30184dd8e31dee858f674a7633ce686e8", size = 3411462, upload-time = "2026-11-18T01:51:08.876Z" },
 ]
 
 [[package]]
@@ -1199,7 +1199,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "axtb", marker = "extra == 'axtb'", specifier = ">=0.2.0a1" },
+    { name = "axtb", marker = "extra == 'axtb'", specifier = ">=0.2.0a3" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "qccompute", specifier = ">=0.23.0rc1" },
