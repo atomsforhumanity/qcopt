@@ -16,8 +16,8 @@ algorithms, and the 77 golden trajectories are bit-identical to 0.3.0a11's.
 
 ### Fixed
 
-- The `axtb` extra requires axtb 0.2.0a3, the first whose plans validate on qccompute
-  0.23 (earlier ones state `threads`, which 0.23 removed).
+- The `axtb` extra requires axtb 0.2.0, the first final whose plans validate on
+  qccompute 0.23 (axtb 0.2.0a2 and earlier state `threads`, which 0.23 removed).
 
 ### Removed
 
