@@ -164,8 +164,8 @@ pip install qcopt           # on qccompute 0.23 (qcdata 0.24)
 pip install "qcopt[axtb]"   # with axtb: g-xTB and GFN2-xTB, analytic Hessians
 ```
 
-The `axtb` extra installs [axtb](https://github.com/atomsforhumanity/axtb) 0.2 or newer. Its wheels are for x86-64 Linux; elsewhere pip builds it from source,
-which needs Rust.
+The `axtb` extra installs [axtb](https://github.com/atomsforhumanity/axtb) 0.2 or newer. Its
+wheels are for x86-64 Linux; elsewhere pip builds it from source, which needs Rust.
 
 ## Status
 
