@@ -74,7 +74,7 @@ One qcopt calculation needs nothing set: it runs on its caller's threads (the ru
 at top level), its gradient and Hessian calculations use them, and qcopt's own steps take
 one. For many calculations at once, set `threads: 1` on each qcopt input, or pass them as
 one list, which divides the threads among them. qccompute's
-[Threads](https://qccompute.docs.afh.org/next/threads/) page has the rules.
+[Threads](https://qccompute.docs.afh.org/threads/) page has the rules.
 
 ## Settings
 
@@ -160,15 +160,12 @@ gradients; results are summarized in AFH's findings.
 ## Install
 
 ```sh
-pip install --pre "qcopt==0.3.0a11"         # on qccompute 0.23.0rc1 (qcdata 0.24.0a8)
-pip install --pre "qcopt[axtb]==0.3.0a11"   # with axtb: g-xTB and GFN2-xTB, analytic Hessians
+pip install qcopt           # on qccompute 0.23 (qcdata 0.24)
+pip install "qcopt[axtb]"   # with axtb: g-xTB and GFN2-xTB, analytic Hessians
 ```
 
-This README describes the 0.3 alphas. Without `--pre`, pip installs qcopt 0.2, whose
-interface differs.
-
-The `axtb` extra installs [axtb](https://github.com/atomsforhumanity/axtb) 0.2 or newer, the
-first with sessions. Its wheels are for x86-64 Linux; elsewhere pip builds it from source,
+The `axtb` extra installs [axtb](https://github.com/atomsforhumanity/axtb) 0.2.0a3 or newer,
+the first that runs on qccompute 0.23. Its wheels are for x86-64 Linux; elsewhere pip builds it from source,
 which needs Rust.
 
 ## Status

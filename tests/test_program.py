@@ -1,12 +1,9 @@
 """qcopt as an AFH program: run natively by qccompute, children through sessions."""
 
-from importlib import metadata
-
 import numpy as np
 import pytest
 import qccompute
 import qccompute.program as program_protocol
-from packaging.version import Version
 from qccompute.program import FunctionProgram
 from qccompute.testing import toy
 from qcdata import (
@@ -30,12 +27,6 @@ from .surfaces import (
     MB_SADDLES,
     muller_brown,
     muller_brown_hessian,
-)
-
-#: qccompute 0.23.0rc1 (#102): a calculation without ``threads`` gets its caller's count
-CALLERS_COUNT = pytest.mark.skipif(
-    Version(metadata.version("qccompute")) < Version("0.23.0rc1"),
-    reason="needs qccompute 0.23.0rc1: a calculation gets its caller's count",
 )
 
 SIGMA = toy.DEFAULT_SIGMA
@@ -93,7 +84,7 @@ def test_qccompute_runs_qcopt_natively_on_a_session_program():
 
 
 def test_plan_resolves_settings_and_states_no_threads():
-    # qccompute 0.23.0rc1: a calculation runs on its threads, else its caller's count
+    # qccompute 0.23: a calculation runs on its threads, else its caller's count
     spec = TOY.model_copy(update={"keywords": {"threads": 3}})
     plan = program.plan(_input(children=[spec]))
     assert plan.resolved.settings["coordinate_system"] == "tric"
@@ -350,14 +341,12 @@ def test_a_calculation_s_threads_setting_is_what_it_asks_the_runner_for():
     assert one.resolved.settings["threads"] == 1
 
 
-@CALLERS_COUNT
 def test_without_threads_a_calculation_runs_on_its_caller_s_count():
     two = TOY.model_copy(update={"keywords": {"threads": 2}})
     with qccompute.Runner(threads=2) as runner:
         assert runner.compute(_input(children=[two])).execution.threads == 2
 
 
-@CALLERS_COUNT
 def test_each_calculation_of_a_list_reports_the_threads_it_ran_with():
     # ExecutionInfo.threads is what the calculation ran with: four calculations on
     # 8 threads ran with 2 each, not with the list's 8

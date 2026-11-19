@@ -4,12 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [unreleased]
+## [0.3.0] - UNRELEASED
+
+qcopt 0.3 on the finals of AFH's qc* stack (qcdata 0.24.0, qccompute 0.23.0). The changes
+since 0.2.3 are in the 0.3.0a1 to 0.3.0a11 sections below; this release adds none to the
+algorithms, and the 77 golden trajectories are bit-identical to 0.3.0a11's.
+
+### Changed
+
+- Requires qccompute 0.23.0 and qcdata 0.24.0.
 
 ### Fixed
 
 - The `axtb` extra requires axtb 0.2.0a3, the first whose plans validate on qccompute
-  0.23.0rc1 (earlier ones state `threads`, which rc1 removed).
+  0.23 (earlier ones state `threads`, which 0.23 removed).
+
+### Removed
+
+- The test suite's skips for pre-final qccompute and axtb.
 
 ## [0.3.0a11] - 2026-11-18
 
@@ -468,6 +480,7 @@ Documentation and benchmark scripts only; the optimizers are unchanged from 0.2.
   (a string was ignored).
 
 [unreleased]: https://github.com/atomsforhumanity/qcopt/compare/0.3.0a11...HEAD
+[0.3.0]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0
 [0.3.0a11]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a11
 [0.3.0a10]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a10
 [0.3.0a9]: https://github.com/atomsforhumanity/qcopt/releases/tag/0.3.0a9

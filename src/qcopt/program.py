@@ -309,7 +309,7 @@ def _plan_children(inp: ProgramInput) -> Resources:
 
     A child's settings are checked here, before anything is computed (an unknown key, a
     setting that cannot take effect). Children run through qccompute's codecs are
-    checked when they run. The plan states no threads (qccompute 0.23.0rc1 gives a
+    checked when they run. The plan states no threads (qccompute 0.23 gives a
     calculation its ``threads``, else its caller's count, which its children share);
     the memory and GPUs are the largest child's.
 
