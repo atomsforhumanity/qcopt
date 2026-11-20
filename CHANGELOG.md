@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [0.3.0] - UNRELEASED
+## [0.3.0] - 2026-11-20
 
 qcopt 0.3 on the finals of AFH's qc* stack (qcdata 0.24.0, qccompute 0.23.0). The changes
 since 0.2.3 are in the 0.3.0a1 to 0.3.0a11 sections below; this release adds none to the
