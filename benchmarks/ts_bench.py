@@ -29,8 +29,8 @@ import numpy as np  # noqa: E402
 warnings.filterwarnings("ignore")
 
 import axtb  # noqa: E402
+from qcdata import ProgramInput, Structure  # noqa: E402
 from qcref import constants as c  # noqa: E402
-from qcref import periodic_table as pt  # noqa: E402
 
 BOHR = float(c.BOHR_TO_ANGSTROM)
 EV = float(c.HARTREE_TO_EV)
@@ -49,10 +49,22 @@ class Counted:
         accuracy: float | None = None,
     ):
         self.symbols = symbols
-        numbers = [int(getattr(pt, s.capitalize()).number) for s in symbols]
-        kw = {} if accuracy is None else {"accuracy": accuracy}
-        self.calc = axtb.Calculator(
-            method, numbers, pos_bohr, charge=float(charge), uhf=mult - 1, **kw
+        keywords: dict = {"threads": 1, "freq": {"analysis": "off"}}
+        if accuracy is not None:
+            keywords["accuracy_scale"] = accuracy
+        structure = Structure(
+            symbols=symbols, geometry=pos_bohr, charge=charge, multiplicity=mult
+        )
+        # one axtb session per run: each SCF starts from the previous geometry's, as
+        # axtb does for any program that keeps its session
+        self.session = axtb.Session(
+            ProgramInput(
+                program="axtb",
+                calctype="gradient",
+                structure=structure,
+                model={"method": method},
+                keywords=keywords,
+            )
         )
         self.n_grad = 0
         self.n_hess = 0
@@ -63,30 +75,28 @@ class Counted:
 
     def gradient(self, pos_bohr: np.ndarray) -> tuple[float, np.ndarray]:
         t = time.perf_counter()
-        r = self.calc.singlepoint(
-            np.asarray(pos_bohr, dtype=float).reshape(-1, 3), gradient=True
-        )
+        r = self._compute(pos_bohr, "gradient")
         self.t_grad += time.perf_counter() - t
         self.n_grad += 1
-        return float(r["energy"]), np.asarray(r["gradient"], dtype=float).reshape(-1, 3)
+        return float(r.energy), np.asarray(r.gradient, dtype=float).reshape(-1, 3)
 
     def energy(self, pos_bohr: np.ndarray) -> float:
         t = time.perf_counter()
-        r = self.calc.singlepoint(
-            np.asarray(pos_bohr, dtype=float).reshape(-1, 3), gradient=False
-        )
+        r = self._compute(pos_bohr, "energy")
         self.t_energy += time.perf_counter() - t
         self.n_energy += 1
-        return float(r["energy"])
+        return float(r.energy)
 
     def hessian(self, pos_bohr: np.ndarray) -> np.ndarray:
         t = time.perf_counter()
-        r = self.calc.hessian(
-            np.asarray(pos_bohr, dtype=float).reshape(-1, 3), vibrations=False
-        )
+        r = self._compute(pos_bohr, "hessian")
         self.t_hess += time.perf_counter() - t
         self.n_hess += 1
-        return np.asarray(r["hessian"], dtype=float)
+        return np.asarray(r.hessian, dtype=float)
+
+    def _compute(self, pos_bohr: np.ndarray, calctype: str):
+        x = np.asarray(pos_bohr, dtype=float).reshape(-1, 3)
+        return self.session.compute(x, calctype).results
 
 
 def read_xyz(path: str) -> tuple[list[str], np.ndarray]:
